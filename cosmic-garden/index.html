@@ -115,7 +115,7 @@ function shed(h,b,amount,severity){
  for(let j=0;j<count;j++){
   const z=(j+.5)/count-.5,offset=(.035+.11*severity)*c,rad=Math.max(c*1.005,r+offset*(1.5*z-.55));
   const p=u.map((x,k)=>x*rad+t[k]*offset*Math.sin(j*2.39996)),mass=amount/count;
-  const q={p,v:b.v.map((x,k)=>x-h.v[k]+u[k]*z*.12*Math.sqrt(G*h.m/Math.max(r,c))),mass,size:size*(.55+1.1*Math.abs(z)),color:b.color,tail:[],age:0,fluid,flowId:b.flowId,gas:b.kind!=='star',sourceWidth:bodyBase({...b,r:b.tidalR||b.r,m:b.tidalM||b.m})};
+  const q={p,v:b.v.map((x,k)=>x-h.v[k]+u[k]*z*.12*Math.sqrt(G*h.m/Math.max(r,c))),mass,size:size*(.55+1.1*Math.abs(z)),color:b.color,tail:[],age:0,fluid,flowId:b.flowId,gas:b.kind!=='star',sourceTex:b.tex,sourceWidth:bodyBase({...b,r:b.tidalR||b.r,m:b.tidalM||b.m})};
   if(debris.length>=160){const old=debris.shift();if(!old.captured){h.r*=1+old.mass/h.m;h.m+=old.mass;}}
   debris.push(q);
  }
@@ -409,7 +409,7 @@ function smoothFluidFrame(owner,id,head,center,R,stretch,turn,followHead=false,d
  const dx=head[0]-center[0],dy=head[1]-center[1],r=Math.hypot(dx,dy)/Math.max(R,1e-6),a=Math.atan2(dy,dx);
  const target=clamp(turn,-2.65,2.65),z=clamp(stretch,0,1),view=[W,H,state.yaw,state.pitch,state.zoom,state.track,state.sel].join('/');
  let p=map.get(id);
- if(!p){p={r,a,z,turn:target,view,wrap:0,fade:0,drain:0,phase:0,dir:Math.sign(orbitDir||target||-1)};map.set(id,p)}
+ if(!p){p={r,a,z,turn:target,view,wrap:0,fade:0,phase:0,dir:Math.sign(orbitDir||target||-1)};map.set(id,p)}
  else{
   const changed=p.view!==view,dt=state.paused?0:clamp(fluidFrameDt,0,.05),k=1-Math.exp(-dt*12);
   if(followHead||changed){p.r=r;p.a=a}else{p.r+=(r-p.r)*k;p.a=shortAngle(p.a+clamp(shortAngle(a-p.a)*k,-4*dt,4*dt))}
@@ -421,74 +421,173 @@ function smoothFluidFrame(owner,id,head,center,R,stretch,turn,followHead=false,d
  }
  // Grow a continuous spiral from the existing tip; do not draw a permanent disk.
  const dt=state.paused?0:clamp(fluidFrameDt,0,.05)*Math.min(2,Math.sqrt(state.speed||1));
- const feed=draining?1:smooth01((p.z-.30)/.50);
- p.wrap=Math.min(TAU,p.wrap+dt*2.65*feed);
+ const feed=draining?1:smooth01((p.z-.48)/.48);
+ p.wrap=Math.min(TAU,p.wrap+dt*1.65*feed);
  p.phase+=dt*1.8;
- if(draining){p.drain+=dt;if(p.wrap>=TAU-1e-6)p.fade=Math.min(1,p.fade+dt/2.6)}
- else{p.drain=0;p.fade=Math.max(0,p.fade-dt)}
- const fade=1-smooth01(p.fade),bodyFade=draining?1-smooth01(p.drain/2.1):1;
+ if(draining&&p.wrap>=TAU-1e-6)p.fade=Math.min(1,p.fade+dt/3.5);
+ else if(!draining)p.fade=Math.max(0,p.fade-dt);
+ const fade=1-smooth01((p.fade-.64)/.36);
  const radius=draining?Math.max(1.10,p.r):p.r;
- return {head:[center[0]+R*radius*Math.cos(p.a),center[1]+R*radius*Math.sin(p.a)],stretch:p.z,turn:p.turn,wrap:p.wrap,dir:p.dir,phase:p.phase,fade,bodyFade,draining}
+ return {head:[center[0]+R*radius*Math.cos(p.a),center[1]+R*radius*Math.sin(p.a)],stretch:p.z,turn:p.turn,wrap:p.wrap,dir:p.dir,phase:p.phase,fade,release:p.fade,draining}
 }
-// A single tapered, luminous tidal stream: the waterdrop and its orbiting filament
-// share the same centerline and cross-section at their join.
-function fluidRibbon(head,center,R,width,stretch,opacity,turn,gas=false,visual={}){
- if(![...head,...center,R,width,stretch,opacity,turn].every(Number.isFinite)||width<=0)return;
- const dx=head[0]-center[0],dy=head[1]-center[1],rawR=Math.hypot(dx,dy),a=Math.atan2(dy,dx);
- if(rawR<R*.99&&!visual.draining)return;
- const z=clamp(stretch,0,1),r0=Math.max(rawR,R*1.02),tipR=r0+(R*1.13-r0)*z;
- const bend=clamp(turn,-2.65,2.65)*z,dir=visual.dir||Math.sign(bend)||-1,wrap=clamp(visual.wrap||0,0,TAU);
- const fade=visual.fade??1,bodyFade=visual.bodyFade??1,phase=visual.phase||0;
- if(fade<=.002)return;
- const tipA=a+bend,tailMix=smooth01(wrap/.6);
- const filament=Math.min(R*.065,Math.max(.75,Math.min(width*.30,R*.055)))*tailMix;
- const points=[];
- // Main body tapers into the same finite-width filament instead of ending at a disconnected point.
- for(let i=0;i<=48;i++){
-  const t=i/48,rr=r0+(tipR-r0)*(1-(1-t)**1.65);
-  const ang=a+bend*smooth01(t)+dir*.42*z*t*t*(t-1);
-  const w=width*(1-t)**2.35*bodyFade+filament*t*t;
-  points.push({x:center[0]+rr*Math.cos(ang),y:center[1]+rr*Math.sin(ang),w,alpha:Math.max(bodyFade*opacity*(1-t*.42),tailMix*fade*.86*t*t),t,tail:false});
+// A material swatch goes from the original surface at the core to sheared layers
+// of the same atmosphere in the stream. Cache it once per source texture.
+const tidalSwatches=new Map();
+function tidalSwatch(tex,tone){
+ const key=tex+'/'+tone,map=pixels[tex],cached=tidalSwatches.get(key);
+ if(cached&&cached.map===map)return cached.canvas;
+ const canvas=document.createElement('canvas'),w=canvas.width=384,h=canvas.height=96;
+ const g=canvas.getContext('2d'),im=g.createImageData(w,h),star=tex==='sun';
+ const hot=tone==='white'||tone==='blue'?[255,221,167]:[255,201,130];
+ for(let x=0;x<w;x++)for(let y=0;y<h;y++){
+  const u=x/(w-1),v=2*(y+.5)/h-1,round=Math.sqrt(1-v*v);
+  const lon=clamp((u-.24)/.24,-1,1);
+  const lat=v*Math.sqrt(1-lon*lon);
+  const flow=Math.max(0,(u-.4)/.6);
+  const phi=TAU*(.9*flow+.14*v);
+  const shear=smooth01((u-.20)/.44);
+  const band=v+.10*Math.sin(phi+3*v)+.045*Math.sin(2*phi-7*v);
+  const sx=.53+Math.asin(lon)*.16*(1-shear)+.26*u*shear;
+  const sy=.50+.32*((1-shear)*Math.asin(lat)+shear*band);
+  const ix=map?Math.min(map.w-1,Math.floor(sx*map.w)):0;
+  const iy=map?clamp(Math.floor(sy*map.h),0,map.h-1):0;
+  const src=map?4*(iy*map.w+ix):0;
+  const light=(star?.68:.42)+round*(star?.33:.51)-.13*v;
+  const fiber=.5+.5*Math.cos(25*band+2*Math.sin(7*band-phi));
+  const lit=(.21+.38*fiber*fiber+.23*round)*shear;
+  const dst=4*(y*w+x);
+  for(let c=0;c<3;c++){
+   let base=map?map.rgba[src+c]:(star?[248,177,88]:[206,173,141])[c];
+   if(star&&tone!=='natural'){
+    const heat=map?.rgba?(.25*map.rgba[src]+.6*map.rgba[src+1]+.15*map.rgba[src+2]):187;
+    base=tone==='red'?heat*[1.08,.51,.27][c]+[32,20,12][c]:
+         tone==='blue'?heat*[.66,.85,.97][c]+[37,55,84][c]:heat*[.76,.85,.91][c]+[73,78,93][c];
+   }
+   const color=light*base*(1-lit)+hot[c]*lit+.12*hot[c]*shear*fiber;
+   const cooling=smooth01((u-.55)/.45);
+   im.data[dst+c]=color*(1-cooling*[.09,.37,.62][c]);
+  }
+  im.data[dst+3]=255;
  }
- // Spiral slightly inward over one revolution, maintaining a gap from the horizon.
- const steps=Math.ceil(wrap/TAU*112);
+ g.putImageData(im,0,0);tidalSwatches.set(key,{map,canvas});return canvas
+}
+function fluidRibbon(head,center,R,width,stretch,opacity,turn,tex,tone,visual){
+ if(![...head,...center,R,width,stretch,turn].every(Number.isFinite)||width<=0||visual.fade<=.002)return;
+ const dx=head[0]-center[0],dy=head[1]-center[1],a=Math.atan2(dy,dx),dir=visual.dir;
+ const z=clamp(stretch,0,1),r0=Math.max(Math.hypot(dx,dy),R*1.035);
+ const reach=Math.max(0,r0-R*1.39),tipR=r0-reach*z;
+ const bend=dir*z*(.50+.72*Math.abs(turn)),wrap=visual.wrap;
+ const polar=(r,angle)=>({x:center[0]+r*Math.cos(angle),y:center[1]+r*Math.sin(angle)});
+ const start=polar(r0,a),join=polar(tipR,a+bend);
+ // A cubic leaves the core on its incoming tangent and meets the spiral on
+ // its orbital tangent, including the radial derivative of the tightening turn.
+ const forward=a+dir*(Math.PI-.50);
+ const length=Math.max(width*1.2,Math.hypot(join.x-start.x,join.y-start.y));
+ const handle=length*.38,radial=-.46*Math.max(0,tipR-R*1.055);
+ const endAngle=a+bend,tx=radial*Math.cos(endAngle)-dir*tipR*Math.sin(endAngle),
+       ty=radial*Math.sin(endAngle)+dir*tipR*Math.cos(endAngle),norm=Math.hypot(tx,ty);
+ const p1={x:start.x+handle*Math.cos(forward),y:start.y+handle*Math.sin(forward)};
+ const p2={x:join.x-handle*tx/norm,y:join.y-handle*ty/norm};
+ const pts=[],coreW=width*(1-.14*z),back=coreW*(1+.12*z);
+ function add(p){
+  const last=pts[pts.length-1],d=last?Math.hypot(last.x-p.x,last.y-p.y):0;
+  if(last&&d<.006)return;
+  pts.push({...p,s:last?last.s+d:-back});
+ }
+ for(let i=0;i<=15;i++){
+  const s=-back*Math.cos(i*Math.PI/30);
+  add({x:start.x+s*Math.cos(forward),y:start.y+s*Math.sin(forward)});
+ }
+ // Grow out of a sphere continuously, even when a scene opens at full disruption.
+ const straight=coreW*(1+.35*z),curveMix=smooth01(z/.45);
+ for(let i=1;i<=48;i++){
+  const t=i/48,v=1-t,b0=v**3,b1=3*v*v*t,b2=3*v*t*t,b3=t**3;
+  const x=b0*start.x+b1*p1.x+b2*p2.x+b3*join.x,y=b0*start.y+b1*p1.y+b2*p2.y+b3*join.y;
+  add({x:(1-curveMix)*(start.x+t*straight*Math.cos(forward))+curveMix*x,
+       y:(1-curveMix)*(start.y+t*straight*Math.sin(forward))+curveMix*y});
+ }
+ const entry=pts[pts.length-1].s,steps=Math.ceil(wrap*16);
  for(let i=1;i<=steps;i++){
-  const u=i/steps,angle=wrap*u,ang=tipA+dir*angle;
-  const rr=R*1.045+(tipR-R*1.045)*Math.exp(-angle*.52);
-  const taper=(1-u)**.60,flow=.84+.16*Math.sin(angle*7-phase*4);
-  points.push({x:center[0]+rr*Math.cos(ang),y:center[1]+rr*Math.sin(ang),w:filament*taper,alpha:fade*.90*flow*(1-u)**.52,t:u,tail:true});
+  const angle=wrap*i/steps;
+  add(polar(R*1.055+(tipR-R*1.055)*Math.exp(-angle*.46),endAngle+dir*angle));
  }
- ctx.save();
- // Keep all emission outside the shadow even when the final filament becomes thin.
- ctx.beginPath();ctx.rect(0,0,W,H);ctx.arc(center[0],center[1],R*1.003,0,TAU);ctx.clip('evenodd');
- ctx.globalCompositeOperation='screen';ctx.lineCap='round';ctx.lineJoin='round';
- // Contiguous segment strokes with local widths allow color and brightness to travel around a full curve.
- for(let i=1;i<points.length;i++){
-  const p=points[i-1],q=points[i],w=(p.w+q.w)/2,alpha=clamp((p.alpha+q.alpha)/2,0,1);
-  if(w<.025||alpha<.005)continue;
-  const hot=q.tail?Math.max(0,1-q.t):1-q.t*.42;
-  const red=255,green=Math.round(122+112*hot),blue=Math.round(48+108*hot);
-  ctx.beginPath();ctx.moveTo(p.x,p.y);ctx.lineTo(q.x,q.y);
-  ctx.strokeStyle='rgba(255,116,36,'+(alpha*.075)+')';ctx.lineWidth=Math.max(.6,w*4.8);ctx.stroke();
-  ctx.strokeStyle='rgba(255,173,66,'+(alpha*.23)+')';ctx.lineWidth=Math.max(.45,w*2.8);ctx.stroke();
-  ctx.strokeStyle='rgba('+red+','+green+','+blue+','+(alpha*.77)+')';ctx.lineWidth=Math.max(.38,w*1.65);ctx.stroke();
-  ctx.strokeStyle='rgba(255,244,198,'+(alpha*.35*hot)+')';ctx.lineWidth=Math.max(.23,w*.52);ctx.stroke();
+ const end=pts[pts.length-1].s,total=end+back;
+ const filament=Math.min(Math.max(1.15,R*.105),Math.max(1.15,coreW*.26,R*.050));
+ const peel=smooth01(visual.release),front=-back+peel*(total+back);
+ const surface=tidalSwatch(tex,tone),cols=surface.width-1;
+ for(let i=0;i<pts.length;i++){
+  const p=pts[i],prev=pts[Math.max(0,i-1)],next=pts[Math.min(pts.length-1,i+1)];
+  const vx=next.x-prev.x,vy=next.y-prev.y,n=Math.max(.0001,Math.hypot(vx,vy));
+  p.nx=-vy/n;p.ny=vx/n;
+  const q=p.s/(p.s<0?back:straight),ball=Math.sqrt(Math.max(0,1-q*q));
+  const neck=Math.exp(-1.25*Math.max(0,q)**2);
+  const orbit=clamp((p.s-entry)/Math.max(.01,end-entry),0,1);
+  const terminal=smooth01((end-p.s)/Math.max(.1,Math.min(total*.34,Math.max(2*filament,R*.50))));
+  const body=p.s<0?ball:(1-z)*ball+z*neck;
+  const line=z*filament*(1-neck)*(.99-.32*orbit)*Math.sqrt(terminal);
+  p.w=(coreW*body+line)*(peel?smooth01((p.s-front)/Math.max(2,back*1.2)):1);
+  p.u=q<0?.24*(1+q):.24+.36*(1-Math.exp(-q*.85))+.40*clamp(p.s/Math.max(end,.001),0,1);
  }
- if(bodyFade*opacity>.01){
-  ctx.globalAlpha=clamp(bodyFade*opacity,0,1);
-  const p=points[0],w=Math.max(.3,width*bodyFade);
-  glow(p.x,p.y,w*3.5,[[0,gas?'rgba(255,220,154,.65)':'rgba(255,231,124,.77)'],[.37,'rgba(255,186,84,.36)'],[1,'rgba(255,148,41,0)']]);
-  dot(p.x,p.y,w*.86,gas?'#ffe5b4':'#fff4a1');
+ function contour(scale){
+  ctx.beginPath();
+  for(let i=0;i<pts.length;i++){const p=pts[i],w=p.w*scale;i?ctx.lineTo(p.x+p.nx*w,p.y+p.ny*w):ctx.moveTo(p.x+p.nx*w,p.y+p.ny*w)}
+  for(let i=pts.length-1;i>=0;i--){const p=pts[i],w=p.w*scale;ctx.lineTo(p.x-p.nx*w,p.y-p.ny*w)}
+  ctx.closePath();
+ }
+ ctx.save();ctx.beginPath();ctx.rect(0,0,W,H);ctx.arc(...center,R*1.002,0,TAU);ctx.clip('evenodd');
+ ctx.globalAlpha=opacity*visual.fade;
+ ctx.globalCompositeOperation='screen';
+ for(const [scale,color] of [[3.3,'rgba(245,133,67,.055)'],[1.9,'rgba(255,176,90,.14)']]){
+  contour(scale);ctx.fillStyle=color;ctx.fill();
+ }
+ // Translucent gas peels off the shoulders, fans out, and rejoins the
+ // bright stream. Vary its cross-section along the orbit as the material flows.
+ for(const side of [-1,1]){
+  ctx.beginPath();
+  for(let edge=0;edge<2;edge++)for(let j=0;j<pts.length;j++){
+   const p=pts[edge?pts.length-1-j:j],u=(p.s+back)/total;
+   const envelope=Math.sin(Math.PI*u)**2;
+   const shear=envelope*(.5+.5*Math.sin(12*u+2*side-visual.phase*.64));
+   const offset=side*p.w*(.82+z*(1.5+side*.4)*shear+(edge?.72:0)*z*envelope);
+   const x=p.x+p.nx*offset,y=p.y+p.ny*offset;
+   if(!edge&&!j)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  }
+  ctx.closePath();ctx.fillStyle=side<0?'rgba(255,188,102,.30)':'rgba(247,121,70,.25)';ctx.fill();
+ }
+ ctx.globalCompositeOperation='source-over';contour(1);ctx.clip();
+ // Sample the material perpendicular to the spine. The silhouette clips the
+ // overlapping strips once, so curved joins have neither gaps nor glowing beads.
+ for(let i=1;i<pts.length;i++){
+  const p=pts[i-1],q=pts[i],w=Math.max(p.w,q.w);
+  if(w<.025)continue;
+  const vx=q.x-p.x,vy=q.y-p.y,len=Math.hypot(vx,vy);
+  const sx=clamp(p.u*cols,0,cols),sw=Math.max(.45,Math.min(surface.width-sx,(q.u-p.u)*cols));
+  ctx.save();ctx.transform(vx/len,vy/len,-vy/len,vx/len,p.x,p.y);
+  ctx.drawImage(surface,sx,0,sw,surface.height,-.45,-w-.20,len+.90,2*w+.40);ctx.restore();
+ }
+ // Narrow advecting strands separate at the neck, and dim across the last arc.
+ ctx.globalCompositeOperation='screen';
+ for(let k=0;k<4;k++){
+  ctx.beginPath();let started=false;
+  for(const p of pts){
+   if(p.s<0||p.w<.08)continue;
+   const u=(p.s+back)/total,shift=(k-1.5)*.34+.16*Math.sin(10*u+k*1.9-visual.phase)+.05*Math.sin(30*u+k-visual.phase*1.5);
+   const x=p.x+p.nx*p.w*shift,y=p.y+p.ny*p.w*shift;
+   if(started)ctx.lineTo(x,y);else{ctx.moveTo(x,y);started=true}
+  }
+  ctx.lineWidth=Math.max(.35,Math.min(1.4,filament*.29));
+  ctx.strokeStyle='rgba(255,232,180,'+(z*(.20+.08*k))+')';ctx.stroke();
  }
  ctx.restore()
 }
+function labFluidRadius(f,g){return clamp(g.size*.019*(f.size??1),f.kind==='gas'?6:8,38)}
 function labFluidFrame(f,g){
- const center=[g.x,g.y],R=g.size*LAB_SHADOW,tidal=f.tidal??1,base=clamp(g.size*.010*(f.size??1),1.8,24),gas=f.kind==='gas';
+ const center=[g.x,g.y],R=g.size*LAB_SHADOW,tidal=f.tidal??1,base=labFluidRadius(f,g),gas=f.kind==='gas';
  if(!f.broken){const b=encounterPosition(f),head=flightProject(b.x,b.y,g),stretch=f.q<tidal?smooth01((tidal*1.7-b.r)/(tidal*.7)):0;
   if(stretch<.025)return false;
   const a=Math.atan2(head[1]-g.y,head[0]-g.x),v=flightProject(b.x+b.vx*.025,b.y+b.vy*.025,g),dir=shortAngle(Math.atan2(v[1]-g.y,v[0]-g.x)-a);
   const shape=smoothFluidFrame(f,'lab',head,center,R,stretch,Math.sign(dir||-1)*1.1,true,false,dir);
-  fluidRibbon(shape.head,center,R,base*(1-.35*shape.stretch),shape.stretch,1,shape.turn,gas,shape);if(state.labels)leader(gas?'气态行星':'恒星',...head,head[0]+26,head[1]-18,1);return true
+  fluidRibbon(shape.head,center,R,base+2*shape.stretch,shape.stretch,1,shape.turn,gas?'jupiter':'sun',gas?'natural':'white',shape);if(state.labels)leader(gas?'气态行星':'恒星',...head,head[0]+26,head[1]-18,1);return true
  }
  const live=f.parts.filter(d=>!d.gone),captured=f.parts.filter(d=>d.disk),n=f.parts.length||1,progress=clamp((f.t-(f.breakTime??f.t))/.24,0,1);
  // Weighted outer portion of the simulated stream forms the bright, coherent head.
@@ -498,10 +597,10 @@ function labFluidFrame(f,g){
  const mix=smooth01(progress),head=flightProject(initial[0]*(1-mix)+p[0]*mix,initial[1]*(1-mix)+p[1]*mix,g);
  const prev=fluidVisuals.get(f)?.get('lab'),turn=nearStreamTurn(positions.map(p=>flightProject(...p,g)),head,center,prev?.turn??-1.1);
  const shape=smoothFluidFrame(f,'lab',head,center,R,1,-1.1*(1-mix)+turn*mix,false,!live.length&&captured.length>0,-1);
- const lastCapture=captured.reduce((m,d)=>Math.max(m,d.diskTime||0),f.breakTime||0),age=live.length?0:Math.max(0,f.t-lastCapture),fraction=live.length/n;
+ const fraction=live.length/n;
  const alpha=live.length?Math.max(.36,Math.sqrt(fraction)):.60;
- const width=base*(.65*(1-mix)+mix*Math.max(.34,.65*Math.sqrt(fraction)));
- fluidRibbon(shape.head,center,R,width,shape.stretch,alpha,shape.turn,gas,shape);
+ const width=(base+2)*((1-mix)+mix*(.45+.55*Math.sqrt(fraction)));
+ fluidRibbon(shape.head,center,R,width,shape.stretch,alpha,shape.turn,gas?'jupiter':'sun',gas?'natural':'white',shape);
  if(live.length&&state.labels)leader('潮汐物质流',...shape.head,shape.head[0]+24,shape.head[1]-22,1);
  return true
 }
@@ -541,7 +640,7 @@ function lab(){
  if(f.kind!=='rock'&&labFluidFrame(f,g))return;
  if(!f.broken){const b=encounterPosition(f),p=flightProject(b.x,b.y,g);
   if(state.trails&&f.trail.length>1){ctx.strokeStyle='#a1cde38a';ctx.lineWidth=1.3;ctx.beginPath();f.trail.forEach((v,i)=>{const q=flightProject(...v,g);i?ctx.lineTo(...q):ctx.moveTo(...q)});ctx.stroke()}
-  const r=clamp(g.size*.010*(f.size??1),2,24);glow(...p,r*3,[[0,'#ebf7ff'],[.3,'#aed7ffe0'],[1,'#7eb8fd00']]);ctx.save();ctx.translate(...p);const p0=flightProject(b.x*.999,b.y*.999,g);ctx.rotate(Math.atan2(p[1]-p0[1],p[0]-p0[0]));const tidal=f.tidal??1,u=f.q<tidal?clamp((tidal*1.55-b.r)/(tidal*.55),0,1):0;ctx.scale(1+.48*u*u*(3-2*u),1);if(f.kind==='rock'||f.kind==='gas')sphere(0,0,r,f.kind==='gas'?'jupiter':'earth',state.elapsed*.02);else star(0,0,r,'white');ctx.restore();leader(f.kind==='rock'?'岩石行星':f.kind==='gas'?'气态行星':'投放的恒星',...p,p[0]+29,p[1]-20,1);
+  const r=f.kind!=='rock'&&f.q<(f.tidal??1)?labFluidRadius(f,g):clamp(g.size*.010*(f.size??1),2,24);glow(...p,r*3,[[0,'#ebf7ff'],[.3,'#aed7ffe0'],[1,'#7eb8fd00']]);ctx.save();ctx.translate(...p);const p0=flightProject(b.x*.999,b.y*.999,g);ctx.rotate(Math.atan2(p[1]-p0[1],p[0]-p0[0]));const tidal=f.tidal??1,u=f.q<tidal?clamp((tidal*1.55-b.r)/(tidal*.55),0,1):0;ctx.scale(1+.48*u*u*(3-2*u),1);if(f.kind==='rock'||f.kind==='gas')sphere(0,0,r,f.kind==='gas'?'jupiter':'earth',state.elapsed*.02);else star(0,0,r,'white');ctx.restore();leader(f.kind==='rock'?'岩石行星':f.kind==='gas'?'气态行星':'投放的恒星',...p,p[0]+29,p[1]-20,1);
  }else{const fade=clamp(1-(f.t-(f.breakTime??-1))/.24,0,1);if(fade>0&&f.breakPos){const p=flightProject(...f.breakPos,g),b=encounterPosition(f),q=flightProject(b.x,b.y,g);ctx.save();ctx.globalAlpha=fade;ctx.translate(...q);ctx.rotate(Math.atan2(q[1]-g.y,q[0]-g.x));ctx.scale(1.48,1);const rr=clamp(g.size*.010*(f.size??1),2,24);if(f.kind==='rock'||f.kind==='gas')sphere(0,0,rr,f.kind==='gas'?'jupiter':'earth',state.elapsed*.02);else star(0,0,rr,'white');ctx.restore()}ctx.save();ctx.globalCompositeOperation='lighter';for(const d of f.parts){if(d.disk){labInfall(d,f,g,R);continue}if(d.gone)continue;const p=flightProject(d.x,d.y,g);
    if(d.tail.length>1&&state.trails){ctx.beginPath();d.tail.forEach((v,i)=>{const q=flightProject(...v,g);i?ctx.lineTo(...q):ctx.moveTo(...q)});ctx.lineWidth=1;ctx.strokeStyle='rgba(244,153,73,.13)';ctx.stroke()}
    dot(...p,clamp(g.size*.0014,.7,2.4)*d.w+.3,'rgba(255,209,150,'+(.72*(1-fade))+')')}ctx.restore();
@@ -610,7 +709,9 @@ function drawSandboxFluids(h,x,y,R){
   const d0=pool[0],dv=d0?(d0.captured?d0.entryV:d0.v):null,dp=d0?(d0.captured?d0.entry:d0.p):null;
   const p0=dp?at(dp):head,p1=dp&&dv?at(dp.map((v,k)=>v+dv[k]*.0001)):head,dir=shortAngle(Math.atan2(p1[1]-y,p1[0]-x)-Math.atan2(p0[1]-y,p0[0]-x));
   const shape=smoothFluidFrame(h,id,head,center,R,stretch,turn,!!core,!core&&!live.length,dir);
-  fluidRibbon(shape.head,center,R,base*(core?1-.32*shape.stretch:1),shape.stretch,opacity,shape.turn,ds[0].gas,shape)
+  const source=ds[0],tex=source.gas?(core?.tex||source.sourceTex||'jupiter'):'sun';
+  const tone=source.color===0xa5caff?'blue':source.color===0xff9da4?'red':'natural';
+  fluidRibbon(shape.head,center,R,base,shape.stretch,opacity,shape.turn,tex,tone,shape)
  }
 }
 function drawImpacts(){
