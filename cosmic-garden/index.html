@@ -407,11 +407,11 @@ function nearStreamTurn(points,head,center,fallback=0){
 function smoothFluidFrame(owner,id,head,center,R,stretch,turn,followHead=false,draining=false,orbitDir=0){
  let map=fluidVisuals.get(owner);if(!map){map=new Map();fluidVisuals.set(owner,map)}
  const dx=head[0]-center[0],dy=head[1]-center[1],r=Math.hypot(dx,dy)/Math.max(R,1e-6),a=Math.atan2(dy,dx);
- const target=clamp(turn,-2.65,2.65),z=clamp(stretch,0,1),view=[W,H,state.yaw,state.pitch,state.zoom,state.track,state.sel].join('/');
+ const target=clamp(Math.abs(turn),0,2.65),z=clamp(stretch,0,1),view=[W,H,state.yaw,state.pitch,state.zoom,state.track,state.sel].join('/');
  let p=map.get(id);
- if(!p){p={r,a,z,turn:target,view,wrap:0,fade:0,phase:0,dir:Math.sign(orbitDir||target||-1)};map.set(id,p)}
+ if(!p){p={r,a,z,turn:target,view,wrap:0,travel:0,fade:0,phase:0,dir:Math.sign(orbitDir||turn||-1)};map.set(id,p)}
  else{
-  const changed=p.view!==view,dt=state.paused?0:clamp(fluidFrameDt,0,.05),k=1-Math.exp(-dt*12);
+  const changed=p.view!==view,dt=state.paused?0:clamp(fluidFrameDt,0,.08),k=1-Math.exp(-dt*12);
   if(followHead||changed){p.r=r;p.a=a}else{p.r+=(r-p.r)*k;p.a=shortAngle(p.a+clamp(shortAngle(a-p.a)*k,-4*dt,4*dt))}
   // Bound changes even when a target crosses the atan2 seam.
   p.turn+=clamp((target-p.turn)*k,-3.5*dt,3.5*dt);
@@ -420,15 +420,17 @@ function smoothFluidFrame(owner,id,head,center,R,stretch,turn,followHead=false,d
   p.view=view
  }
  // Grow a continuous spiral from the existing tip; do not draw a permanent disk.
- const dt=state.paused?0:clamp(fluidFrameDt,0,.05)*Math.min(2,Math.sqrt(state.speed||1));
+ const dt=state.paused?0:clamp(fluidFrameDt,0,.08)*Math.min(2,Math.sqrt(state.speed||1));
  const feed=draining?1:smooth01((p.z-.48)/.48);
- p.wrap=Math.min(TAU,p.wrap+dt*1.65*feed);
+ p.travel=Math.min(TAU,p.travel+dt*1.65*feed);
+ const settle=clamp((p.travel/TAU-.80)/.20,0,1);
+ p.wrap=p.travel+.20*TAU*settle*settle*(1-settle);
  p.phase+=dt*1.8;
  if(draining&&p.wrap>=TAU-1e-6)p.fade=Math.min(1,p.fade+dt/3.5);
  else if(!draining)p.fade=Math.max(0,p.fade-dt);
  const fade=1-smooth01((p.fade-.64)/.36);
- const radius=draining?Math.max(1.10,p.r):p.r;
- return {head:[center[0]+R*radius*Math.cos(p.a),center[1]+R*radius*Math.sin(p.a)],stretch:p.z,turn:p.turn,wrap:p.wrap,dir:p.dir,phase:p.phase,fade,release:p.fade,draining}
+ const radius=p.r;
+ return {head:[center[0]+R*radius*Math.cos(p.a),center[1]+R*radius*Math.sin(p.a)],stretch:p.z,turn:p.turn,wrap:p.wrap,dir:p.dir,phase:p.phase,fade,release:p.fade,draining,renderState:p}
 }
 // A material swatch goes from the original surface at the core to sheared layers
 // of the same atmosphere in the stream. Cache it once per source texture.
@@ -474,6 +476,12 @@ function tidalSwatch(tex,tone){
 function fluidRibbon(head,center,R,width,stretch,opacity,turn,tex,tone,visual){
  if(![...head,...center,R,width,stretch,turn].every(Number.isFinite)||width<=0||visual.fade<=.002)return;
  const dx=head[0]-center[0],dy=head[1]-center[1],a=Math.atan2(dy,dx),dir=visual.dir;
+ // Size and luminosity follow the continuous stream even as individual fragments are captured.
+ const memory=visual.renderState,k=state.paused?0:-Math.expm1(-fluidFrameDt*7.5);
+ memory.widthRatio??=width/R;memory.opacity??=opacity;
+ memory.widthRatio+=(width/R-memory.widthRatio)*k;
+ memory.opacity+=(opacity-memory.opacity)*k;
+ width=R*memory.widthRatio;opacity=memory.opacity;
  const z=clamp(stretch,0,1),r0=Math.max(Math.hypot(dx,dy),R*1.035);
  const reach=Math.max(0,r0-R*1.39),tipR=r0-reach*z;
  const bend=dir*z*(.50+.72*Math.abs(turn)),wrap=visual.wrap;
@@ -506,9 +514,9 @@ function fluidRibbon(head,center,R,width,stretch,opacity,turn,tex,tone,visual){
   add({x:(1-curveMix)*(start.x+t*straight*Math.cos(forward))+curveMix*x,
        y:(1-curveMix)*(start.y+t*straight*Math.sin(forward))+curveMix*y});
  }
- const entry=pts[pts.length-1].s,steps=Math.ceil(wrap*16);
+ const entry=pts[pts.length-1].s,angularDensity=clamp(Math.sqrt(tipR*ratio/.70),12,58),steps=Math.ceil(wrap*angularDensity);
  for(let i=1;i<=steps;i++){
-  const angle=wrap*i/steps;
+  const angle=Math.min(wrap,i/angularDensity);
   add(polar(R*1.055+(tipR-R*1.055)*Math.exp(-angle*.46),endAngle+dir*angle));
  }
  const end=pts[pts.length-1].s,total=end+back;
@@ -558,53 +566,91 @@ function fluidRibbon(head,center,R,width,stretch,opacity,turn,tex,tone,visual){
   ctx.closePath();ctx.fillStyle=side<0?'rgba(255,188,102,.30)':'rgba(247,121,70,.25)';ctx.fill();
  }
  ctx.globalCompositeOperation='source-over';contour(1);ctx.clip();
+ // Lay one continuous copper-to-gold surface under the fine filaments.
+ const axisX=R*Math.cos(endAngle),axisY=R*Math.sin(endAngle);
+ const light=ctx.createLinearGradient(center[0]-axisX,center[1]-axisY,center[0]+axisX,center[1]+axisY);
+ light.addColorStop(0,'#a75642');light.addColorStop(.42,'#d2854a');light.addColorStop(.76,'#eeb472');light.addColorStop(1,'#f2c991');
+ ctx.fillStyle=light;ctx.fill();
+ const alpha=ctx.globalAlpha,blendLength=Math.max(2,R*.48);
  // Sample the material perpendicular to the spine. The silhouette clips the
  // overlapping strips once, so curved joins have neither gaps nor glowing beads.
  for(let i=1;i<pts.length;i++){
   const p=pts[i-1],q=pts[i],w=Math.max(p.w,q.w);
+  if(p.s>=entry+blendLength)break;
   if(w<.025)continue;
+  ctx.globalAlpha=alpha*(1-smooth01((p.s-entry)/blendLength));
   const vx=q.x-p.x,vy=q.y-p.y,len=Math.hypot(vx,vy);
   const sx=clamp(p.u*cols,0,cols),sw=Math.max(.45,Math.min(surface.width-sx,(q.u-p.u)*cols));
   ctx.save();ctx.transform(vx/len,vy/len,-vy/len,vx/len,p.x,p.y);
   ctx.drawImage(surface,sx,0,sw,surface.height,-.45,-w-.20,len+.90,2*w+.40);ctx.restore();
  }
- // Narrow advecting strands separate at the neck, and dim across the last arc.
- ctx.globalCompositeOperation='screen';
- for(let k=0;k<4;k++){
-  ctx.beginPath();let started=false;
+ // Taper both sides of each highlight within the fine arc. Broad, moving
+ // crests carry light around the bend without blinking or adding another ring.
+ ctx.globalAlpha=alpha*z;ctx.globalCompositeOperation='screen';
+ for(let lane=0;lane<3;lane++){
+  ctx.beginPath();
   for(const p of pts){
-   if(p.s<0||p.w<.08)continue;
-   const u=(p.s+back)/total,shift=(k-1.5)*.34+.16*Math.sin(10*u+k*1.9-visual.phase)+.05*Math.sin(30*u+k-visual.phase*1.5);
-   const x=p.x+p.nx*p.w*shift,y=p.y+p.ny*p.w*shift;
-   if(started)ctx.lineTo(x,y);else{ctx.moveTo(x,y);started=true}
+   const distance=p.s/Math.max(R,1),angle=distance-visual.phase*.76+lane*1.8;
+   const wave=.5+.5*Math.cos(angle*1.6+.32*Math.sin(distance*2.5+lane));
+   const lift=(lane-1)*.48+.11*Math.sin(angle*1.4+lane);
+   const half=(lane===1?.19:.095)*(.12+.88*wave*wave)*smooth01((p.s+back*.35)/back);
+   p.edgeX=p.x+p.nx*p.w*(lift-half);p.edgeY=p.y+p.ny*p.w*(lift-half);
+   const x=p.x+p.nx*p.w*(lift+half),y=p.y+p.ny*p.w*(lift+half);
+   if(p===pts[0])ctx.moveTo(x,y);else ctx.lineTo(x,y);
   }
-  ctx.lineWidth=Math.max(.35,Math.min(1.4,filament*.29));
-  ctx.strokeStyle='rgba(255,232,180,'+(z*(.20+.08*k))+')';ctx.stroke();
+  for(let i=pts.length-1;i>=0;i--)ctx.lineTo(pts[i].edgeX,pts[i].edgeY);
+  ctx.closePath();ctx.fillStyle=['rgba(244,143,83,.59)','rgba(255,234,180,.88)','rgba(255,208,145,.72)'][lane];ctx.fill();
  }
  ctx.restore()
 }
 function labFluidRadius(f,g){return clamp(g.size*.019*(f.size??1),f.kind==='gas'?6:8,38)}
+function drawLabBody(f,b,p,g){
+ const tidal=f.tidal??1,disrupts=f.q<tidal;
+ const r=f.kind!=='rock'&&disrupts?labFluidRadius(f,g):clamp(g.size*.010*(f.size??1),2,24);
+ glow(...p,r*3,[[0,'#ebf7ff'],[.3,'#aed7ffe0'],[1,'#7eb8fd00']]);
+ const inner=flightProject(b.x*.999,b.y*.999,g);
+ const stretch=disrupts?smooth01((tidal*1.55-b.r)/(tidal*.55)):0;
+ ctx.save();ctx.translate(...p);ctx.rotate(Math.atan2(p[1]-inner[1],p[0]-inner[0]));
+ ctx.scale(1+.48*stretch,1);
+ if(f.kind==='star')star(0,0,r,'white');
+ else sphere(0,0,r,f.kind==='gas'?'jupiter':'earth',state.elapsed*.02);
+ ctx.restore()
+}
 function labFluidFrame(f,g){
  const center=[g.x,g.y],R=g.size*LAB_SHADOW,tidal=f.tidal??1,base=labFluidRadius(f,g),gas=f.kind==='gas';
  if(!f.broken){const b=encounterPosition(f),head=flightProject(b.x,b.y,g),stretch=f.q<tidal?smooth01((tidal*1.7-b.r)/(tidal*.7)):0;
-  if(stretch<.025)return false;
+  if(stretch<.002)return false;
   const a=Math.atan2(head[1]-g.y,head[0]-g.x),v=flightProject(b.x+b.vx*.025,b.y+b.vy*.025,g),dir=shortAngle(Math.atan2(v[1]-g.y,v[0]-g.x)-a);
   const shape=smoothFluidFrame(f,'lab',head,center,R,stretch,Math.sign(dir||-1)*1.1,true,false,dir);
+  const reveal=smooth01(shape.stretch/.24);
+  if(reveal<1){ctx.save();ctx.globalAlpha=1-reveal;drawLabBody(f,b,head,g);ctx.restore()}
+  shape.fade*=reveal;
   fluidRibbon(shape.head,center,R,base+2*shape.stretch,shape.stretch,1,shape.turn,gas?'jupiter':'sun',gas?'natural':'white',shape);if(state.labels)leader(gas?'气态行星':'恒星',...head,head[0]+26,head[1]-18,1);return true
  }
- const live=f.parts.filter(d=>!d.gone),captured=f.parts.filter(d=>d.disk),n=f.parts.length||1,progress=clamp((f.t-(f.breakTime??f.t))/.24,0,1);
- // Weighted outer portion of the simulated stream forms the bright, coherent head.
- const pool=live.length?live:captured;if(!pool.length)return true;
- const positions=pool.map(d=>d.disk?labCapturedPoint(d,Math.max(0,f.t-d.diskTime)):[d.x,d.y]).sort((a,b)=>Math.hypot(...b)-Math.hypot(...a));
- const outer=positions.slice(0,Math.max(1,Math.ceil(positions.length*.18))),p=outer.reduce((a,b)=>[a[0]+b[0]/outer.length,a[1]+b[1]/outer.length],[0,0]),initial=f.breakPos||p;
- const mix=smooth01(progress),head=flightProject(initial[0]*(1-mix)+p[0]*mix,initial[1]*(1-mix)+p[1]*mix,g);
- const prev=fluidVisuals.get(f)?.get('lab'),turn=nearStreamTurn(positions.map(p=>flightProject(...p,g)),head,center,prev?.turn??-1.1);
- const shape=smoothFluidFrame(f,'lab',head,center,R,1,-1.1*(1-mix)+turn*mix,false,!live.length&&captured.length>0,-1);
- const fraction=live.length/n;
- const alpha=live.length?Math.max(.36,Math.sqrt(fraction)):.60;
- const width=(base+2)*((1-mix)+mix*(.45+.55*Math.sqrt(fraction)));
+ if(fluidVisuals.get(f)?.get('lab')?.fade===1)return true;
+ const points=[],weights=[];let live=0,captured=0,outerRadius=0;
+ for(const d of f.parts){
+  if(d.gone&&!d.disk)continue;
+  const age=d.disk?Math.max(0,f.t-d.diskTime):0;
+  const point=d.disk?labCapturedPoint(d,age):[d.x,d.y];
+  if(d.disk)captured++;else live++;
+  points.push(point);weights.push(.02+.98*Math.exp(-age/.14));
+  outerRadius=Math.max(outerRadius,Math.hypot(...point));
+ }
+ if(!points.length)return true;
+ let x=0,y=0,totalWeight=0;
+ for(let i=0;i<points.length;i++){
+  const point=points[i],w=weights[i]*Math.exp(10*(Math.hypot(...point)/Math.max(outerRadius,.001)-1));
+  totalWeight+=w;x+=point[0]*w;y+=point[1]*w;
+ }
+ const mix=smooth01((f.t-(f.breakTime??f.t))/.24),incoming=encounterPosition(f);
+ const head=flightProject(incoming.x*(1-mix)+x/totalWeight*mix,incoming.y*(1-mix)+y/totalWeight*mix,g);
+ const prev=fluidVisuals.get(f)?.get('lab'),turn=nearStreamTurn(points.map(p=>flightProject(...p,g)),head,center,prev?.turn??-1.1);
+ const shape=smoothFluidFrame(f,'lab',head,center,R,1,1.1*(1-mix)+Math.abs(turn)*mix,false,!live&&captured>0,-1);
+ const fraction=Math.sqrt(live/Math.max(1,f.parts.length)),alpha=.60+.40*fraction;
+ const width=(base+2)*((1-mix)+mix*(.45+.55*fraction));
  fluidRibbon(shape.head,center,R,width,shape.stretch,alpha,shape.turn,gas?'jupiter':'sun',gas?'natural':'white',shape);
- if(live.length&&state.labels)leader('潮汐物质流',...shape.head,shape.head[0]+24,shape.head[1]-22,1);
+ if(live&&state.labels)leader('潮汐物质流',...shape.head,shape.head[0]+24,shape.head[1]-22,1);
  return true
 }
 function infallArc(x,y,R,phase,age,strength=1){
@@ -632,10 +678,23 @@ function labInfall(d,f,g,R){
  dot(...head,Math.max(.32,size*Math.exp(-t*.37)),'rgba(255,'+red+','+blue+','+alpha+')');ctx.restore();
 }
 function projectedHoleRadius(b,p){const q=holeCapture(b);let r=0;for(let k=0;k<3;k++)for(const sign of [-1,1]){const v=[...b.p];v[k]+=sign*q;const z=project(v);r=Math.max(r,Math.hypot(z[0]-p[0],z[1]-p[1]))}return Math.max(1.8,r)}
+let labBackdrop=null;
+function drawLabBackdrop(g,inc){
+ const key=[canvas.width,canvas.height,W,H,state.yaw,state.pitch,ready(pictures.sky)].join('/');
+ const cache=labBackdrop;
+ if(cache&&cache.key===key&&Math.abs(cache.size-g.size)*LAB_SHADOW*ratio<.12){
+  ctx.drawImage(cache.canvas,0,0,W,H);return
+ }
+ sky();holeArt(g.x,g.y,g.size,g.roll,inc);
+ const layer=cache?.canvas||document.createElement('canvas');
+ if(layer.width!==canvas.width||layer.height!==canvas.height){layer.width=canvas.width;layer.height=canvas.height}
+ layer.getContext('2d',{alpha:false}).drawImage(canvas,0,0);
+ labBackdrop={canvas:layer,key,size:g.size};
+}
 function lab(){
  const g=labGeometry(),inc=holeInclination();
  const f0=state.flight;if(f0){const r=f0.broken?Math.hypot(...(f0.breakPos||[f0.q,0])):encounterPosition(f0).r,limit=Math.max(1,Math.min(W,H)*.38),dist=g.size*LAB_SHADOW*Math.asinh(r/.12)/Math.asinh(2),start=limit*.72;if(dist>start){const apparent=limit-(limit-start)*Math.exp(-(dist-start)/(limit-start));g.size*=apparent/dist}}
- holeArt(g.x,g.y,g.size,g.roll,inc);
+ drawLabBackdrop(g,inc);
  const R=g.size*LAB_SHADOW;
  const f=state.flight,active=!!f;
  if(!active){const p=rotPoint(-.055*g.size,-.055*g.size,g.x,g.y,g.roll);leader('黑洞阴影',...p,g.x-.20*g.size,g.y-.14*g.size,-1);
@@ -643,7 +702,7 @@ function lab(){
  if(f.kind!=='rock'&&labFluidFrame(f,g))return;
  if(!f.broken){const b=encounterPosition(f),p=flightProject(b.x,b.y,g);
   if(state.trails&&f.trail.length>1){ctx.strokeStyle='#a1cde38a';ctx.lineWidth=1.3;ctx.beginPath();f.trail.forEach((v,i)=>{const q=flightProject(...v,g);i?ctx.lineTo(...q):ctx.moveTo(...q)});ctx.stroke()}
-  const r=f.kind!=='rock'&&f.q<(f.tidal??1)?labFluidRadius(f,g):clamp(g.size*.010*(f.size??1),2,24);glow(...p,r*3,[[0,'#ebf7ff'],[.3,'#aed7ffe0'],[1,'#7eb8fd00']]);ctx.save();ctx.translate(...p);const p0=flightProject(b.x*.999,b.y*.999,g);ctx.rotate(Math.atan2(p[1]-p0[1],p[0]-p0[0]));const tidal=f.tidal??1,u=f.q<tidal?clamp((tidal*1.55-b.r)/(tidal*.55),0,1):0;ctx.scale(1+.48*u*u*(3-2*u),1);if(f.kind==='rock'||f.kind==='gas')sphere(0,0,r,f.kind==='gas'?'jupiter':'earth',state.elapsed*.02);else star(0,0,r,'white');ctx.restore();leader(f.kind==='rock'?'岩石行星':f.kind==='gas'?'气态行星':'投放的恒星',...p,p[0]+29,p[1]-20,1);
+  drawLabBody(f,b,p,g);leader(f.kind==='rock'?'岩石行星':f.kind==='gas'?'气态行星':'投放的恒星',...p,p[0]+29,p[1]-20,1);
  }else{const fade=clamp(1-(f.t-(f.breakTime??-1))/.24,0,1);if(fade>0&&f.breakPos){const p=flightProject(...f.breakPos,g),b=encounterPosition(f),q=flightProject(b.x,b.y,g);ctx.save();ctx.globalAlpha=fade;ctx.translate(...q);ctx.rotate(Math.atan2(q[1]-g.y,q[0]-g.x));ctx.scale(1.48,1);const rr=clamp(g.size*.010*(f.size??1),2,24);if(f.kind==='rock'||f.kind==='gas')sphere(0,0,rr,f.kind==='gas'?'jupiter':'earth',state.elapsed*.02);else star(0,0,rr,'white');ctx.restore()}ctx.save();ctx.globalCompositeOperation='lighter';for(const d of f.parts){if(d.disk){labInfall(d,f,g,R);continue}if(d.gone)continue;const p=flightProject(d.x,d.y,g);
    if(d.tail.length>1&&state.trails){ctx.beginPath();d.tail.forEach((v,i)=>{const q=flightProject(...v,g);i?ctx.lineTo(...q):ctx.moveTo(...q)});ctx.lineWidth=1;ctx.strokeStyle='rgba(244,153,73,.13)';ctx.stroke()}
    dot(...p,clamp(g.size*.0014,.7,2.4)*d.w+.3,'rgba(255,209,150,'+(.72*(1-fade))+')')}ctx.restore();
@@ -707,7 +766,7 @@ function drawSandboxFluids(h,x,y,R){
   const fraction=live.length/Math.max(1,ds.length),age=!core&&!live.length?Math.min(...captured.map(d=>Math.max(0,(d.age-d.captureAge)*12))):0;
   const stretch=core?smooth01((core.tidalLost||0)*2.5):1,base=core?bodyRadius(core):clamp((ds[0].sourceWidth||6)*Math.sqrt(state.zoom)*Math.max(.28,.55*Math.sqrt(fraction)),.8,30);
   if(!core&&!live.length){const rr=R*1.13+Math.max(0,Math.hypot(head[0]-x,head[1]-y)-R*1.13)*Math.exp(-age*.45);head=[x+rr*Math.cos(a),y+rr*Math.sin(a)]}
-  const opacity=core?1:live.length?Math.max(.36,Math.sqrt(fraction)):.60;
+  const opacity=core?1:.60+.40*Math.sqrt(fraction);
   const prev=fluidVisuals.get(h)?.get(id),turn=nearStreamTurn(pts,head,center,prev?.turn??0);
   const d0=pool[0],dv=d0?(d0.captured?d0.entryV:d0.v):null,dp=d0?(d0.captured?d0.entry:d0.p):null;
   const p0=dp?at(dp):head,p1=dp&&dv?at(dp.map((v,k)=>v+dv[k]*.0001)):head,dir=shortAngle(Math.atan2(p1[1]-y,p1[0]-x)-Math.atan2(p0[1]-y,p0[0]-x));
@@ -757,7 +816,7 @@ function solar(){
  if(state.labels)for(const {b,i,p:[x,y],r} of [...screenBodies].sort((a,b)=>(b.i===state.sel)-(a.i===state.sel))){if(x<-r*3||y<-r*3||x>W+r*3||y>H+r*3)continue;const lx=x+r+7,ly=y+4;ctx.font=(W<500?'10':'12')+'px system-ui';const len=ctx.measureText(b.name).width;if(i===state.sel||!placed.some(t=>Math.abs(t.y-ly)<14&&lx<t.x+t.w&&lx+len>t.x)){ctx.fillStyle=i===state.sel?'#f3d9ac':'#bbc4cd';ctx.fillText(b.name,lx,ly);placed.push({x:lx,y:ly,w:len})}
  }
 }
-function draw(){sky();if(state.id==='lab')lab();else if(state.id==='life')life();else solar()}
+function draw(){if(state.id==='lab'){lab();return}sky();if(state.id==='life')life();else solar()}
 
 const icons={save:'M4 3h13l3 3v14H4z M7 3v6h9V3 M8 20v-7h8v7',folder:'M3 6h6l2 3h10l-2 10H3z',info:'M12 8h.01 M12 11v5',grid:'M3 4h7v7H3z M14 4h7v7h-7z M3 15h7v6H3z M14 15h7v6h-7z',sliders:'M4 7h5m5 0h6M4 17h10m5 0h1 M9 4h5v6H9z M14 14h5v6h-5z',activity:'M2 13h5l3-7 4 13 3-8h5',focus:'M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5',tag:'M3 4h8l10 10-7 7L3 10z M7 7h.01',chev:'m8 10 4 4 4-4',reset:'M4 5v5h5 M5 10a8 8 0 1 1 1 8',close:'m6 6 12 12 M18 6 6 18',pause:'M8 5v14 M16 5v14',play:'m8 4 12 8-12 8z',launch:'m4 13 7 1 1 7 9-18z M11 14l7-8',next:'m9 5 7 7-7 7',orbit:'M2 12c2-8 18-12 20-5s-13 14-18 11',plus:'M12 4v16M4 12h16'};
 function icon(k){return '<svg viewBox="0 0 24 24" aria-hidden="true">'+(k==='info'?'<circle cx="12" cy="12" r="9"/>':'')+'<path d="'+icons[k]+'" '+(k==='pause'?'style="stroke-width:3.2"':'')+'/></svg>'}
