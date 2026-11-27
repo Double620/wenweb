@@ -676,10 +676,16 @@ function fluidRibbon(head,center,R,width,stretch,opacity,turn,tex,tone,visual){
  }
  ctx.restore()
 }
-function labFluidRadius(f,g){return clamp(g.size*.019*(f.size??1),f.kind==='gas'?6:8,38)}
+// Apply artistic radius limits at the neutral view, then scale every body with the actual hole geometry (including automatic fit).
+function labViewScale(g){return g.size/Math.min(W*1.10,H*1.73)}
+function labScaledRadius(g,coefficient,min,max){
+ const reference=Math.min(W*1.10,H*1.73);
+ return clamp(reference*coefficient,min,max)*labViewScale(g)
+}
+function labFluidRadius(f,g){return labScaledRadius(g,.019*(f.size??1),f.kind==='gas'?6:8,38)}
 function drawLabBody(f,b,p,g){
  const tidal=f.tidal??1,disrupts=f.q<tidal;
- const r=f.kind==='rock'?rockRadius(f,g):disrupts?labFluidRadius(f,g):clamp(g.size*.010*(f.size??1),2,24);
+ const r=f.kind==='rock'?rockRadius(f,g):disrupts?labFluidRadius(f,g):labScaledRadius(g,.010*(f.size??1),2,24);
  if(f.kind!=='rock')glow(...p,r*3,[[0,'#ebf7ff'],[.3,'#aed7ffe0'],[1,'#7eb8fd00']]);
  const inner=flightProject(b.x*.999,b.y*.999,g);
  const stretch=disrupts?smooth01((tidal*1.55-b.r)/(tidal*.55)):0;
@@ -698,7 +704,7 @@ function labFluidFrame(f,g){
   const reveal=smooth01(shape.stretch/.24);
   if(reveal<1){ctx.save();ctx.globalAlpha=1-reveal;drawLabBody(f,b,head,g);ctx.restore()}
   shape.fade*=reveal;
-  fluidRibbon(shape.head,center,R,base+2*shape.stretch,shape.stretch,1,shape.turn,gas?'jupiter':'sun',gas?'natural':'white',shape);if(state.labels)leader(gas?'气态行星':'恒星',...head,head[0]+26,head[1]-18,1);return true
+  fluidRibbon(shape.head,center,R,base+2*labViewScale(g)*shape.stretch,shape.stretch,1,shape.turn,gas?'jupiter':'sun',gas?'natural':'white',shape);if(state.labels)leader(gas?'气态行星':'恒星',...head,head[0]+26,head[1]-18,1);return true
  }
  if(fluidVisuals.get(f)?.get('lab')?.fade===1)return true;
  const points=[],weights=[];let live=0,captured=0,outerRadius=0;
@@ -721,7 +727,7 @@ function labFluidFrame(f,g){
  const prev=fluidVisuals.get(f)?.get('lab'),turn=nearStreamTurn(points.map(p=>flightProject(...p,g)),head,center,prev?.turn??-1.1);
  const shape=smoothFluidFrame(f,'lab',head,center,R,1,1.1*(1-mix)+Math.abs(turn)*mix,false,!live&&captured>0,-1);
  const fraction=Math.sqrt(live/Math.max(1,f.parts.length)),alpha=.60+.40*fraction;
- const width=(base+2)*((1-mix)+mix*(.45+.55*fraction));
+ const width=(base+2*labViewScale(g))*((1-mix)+mix*(.45+.55*fraction));
  fluidRibbon(shape.head,center,R,width,shape.stretch,alpha,shape.turn,gas?'jupiter':'sun',gas?'natural':'white',shape);
  if(live&&state.labels)leader('潮汐物质流',...shape.head,shape.head[0]+24,shape.head[1]-22,1);
  return true
@@ -761,7 +767,7 @@ const crustPlates=(()=>{
  }
  return plates
 })();
-function rockRadius(f,g){return clamp(g.size*.032*(f.size??.42),8,36)}
+function rockRadius(f,g){return labScaledRadius(g,.032*(f.size??.42),8,36)}
 function crustSeams(heat){
  if(heat<=0)return;
  ctx.save();ctx.beginPath();ctx.arc(0,0,1,0,TAU);ctx.clip();
@@ -825,7 +831,7 @@ function drawRockBreakup(f,g,R){
    ctx.lineWidth=.061;ctx.strokeStyle='rgba(255,164,83,'+(.46+.50*heat)+')';ctx.stroke(plate.path);ctx.restore();
    if(!d.gone&&plateIndex===0)label=[x,y]
   }else{
-   rockChip(x,y,clamp(r*.15*d.w,.42,2.4)*Math.exp(-.85*t),i+age*Math.sin(i)*2,heat,mix*fade*.86)
+   rockChip(x,y,clamp(r*.15*d.w,.42*labViewScale(g),2.4*labViewScale(g))*Math.exp(-.85*t),i+age*Math.sin(i)*2,heat,mix*fade*.86)
   }
  }
  ctx.restore();
