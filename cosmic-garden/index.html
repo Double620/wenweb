@@ -392,6 +392,35 @@ function holeArt(x,y,w,roll,inc=holeInclination(),radius=w*LAB_SHADOW,lens=true)
 function isFluidBody(b){return b.kind==='star'||['jupiter','saturn','uranus','neptune'].includes(b.tex)}
 const smooth01=x=>{x=clamp(x,0,1);return x*x*(3-2*x)};
 const shortAngle=x=>Math.atan2(Math.sin(x),Math.cos(x));
+// Per-stream render state, independent of physics.
+const fluidVisuals=new WeakMap();
+let fluidFrameDt=0;
+function nearStreamTurn(points,head,center,fallback=0){
+ const a=Math.atan2(head[1]-center[1],head[0]-center[0]);
+ const radii=points.map(p=>Math.hypot(p[0]-center[0],p[1]-center[1])).filter(Number.isFinite);
+ if(!radii.length)return fallback;
+ const near=Math.max(1e-6,Math.min(...radii));let sx=0,sy=0,sum=0;
+ for(const p of points){const dx=p[0]-center[0],dy=p[1]-center[1],r=Math.hypot(dx,dy);if(!Number.isFinite(r)||r<1e-6)continue;
+  const w=Math.exp(-4*Math.max(0,r/near-1)),t=Math.atan2(dy,dx)-a;sx+=w*Math.cos(t);sy+=w*Math.sin(t);sum+=w}
+ return sum>0&&Math.hypot(sx,sy)>sum*.08?Math.atan2(sy,sx):fallback
+}
+function smoothFluidFrame(owner,id,head,center,R,stretch,turn,followHead=false){
+ let map=fluidVisuals.get(owner);if(!map){map=new Map();fluidVisuals.set(owner,map)}
+ const dx=head[0]-center[0],dy=head[1]-center[1],r=Math.hypot(dx,dy)/Math.max(R,1e-6),a=Math.atan2(dy,dx);
+ const target=clamp(turn,-2.65,2.65),z=clamp(stretch,0,1),view=[W,H,state.yaw,state.pitch,state.zoom,state.track,state.sel].join('/');
+ let p=map.get(id);
+ if(!p){p={r,a,z,turn:target,view};map.set(id,p)}
+ else{
+  const changed=p.view!==view,dt=state.paused?0:clamp(fluidFrameDt,0,.05),k=1-Math.exp(-dt*12);
+  if(followHead||changed){p.r=r;p.a=a}else{p.r+=(r-p.r)*k;p.a=shortAngle(p.a+clamp(shortAngle(a-p.a)*k,-4*dt,4*dt))}
+  // Bound changes even when a target crosses the atan2 seam.
+  p.turn+=clamp((target-p.turn)*k,-3.5*dt,3.5*dt);
+  p.z+=(z-p.z)*k;
+  if(changed&&state.paused){p.turn=target;p.z=z}
+  p.view=view
+ }
+ return {head:[center[0]+R*p.r*Math.cos(p.a),center[1]+R*p.r*Math.sin(p.a)],stretch:p.z,turn:p.turn}
+}
 // A filled tapered stream, not a line or detached collection of dots. Head and tail share one silhouette.
 function fluidRibbon(head,center,R,width,stretch,opacity,turn,gas=false){
  if(![...head,...center,R,width,stretch,opacity,turn].every(Number.isFinite)||opacity<=.005||width<=0)return;
@@ -416,7 +445,8 @@ function labFluidFrame(f,g){
  if(!f.broken){const b=encounterPosition(f),head=flightProject(b.x,b.y,g),stretch=f.q<tidal?smooth01((tidal*1.7-b.r)/(tidal*.7)):0;
   if(stretch<.025)return false;
   const a=Math.atan2(head[1]-g.y,head[0]-g.x),v=flightProject(b.x+b.vx*.025,b.y+b.vy*.025,g),dir=shortAngle(Math.atan2(v[1]-g.y,v[0]-g.x)-a);
-  fluidRibbon(head,center,R,base*(1-.35*stretch),stretch,1,Math.sign(dir||1)*1.1,gas);if(state.labels)leader(gas?'气态行星':'恒星',...head,head[0]+26,head[1]-18,1);return true
+  const shape=smoothFluidFrame(f,'lab',head,center,R,stretch,Math.sign(dir||-1)*1.1,true);
+  fluidRibbon(shape.head,center,R,base*(1-.35*shape.stretch),shape.stretch,1,shape.turn,gas);if(state.labels)leader(gas?'气态行星':'恒星',...head,head[0]+26,head[1]-18,1);return true
  }
  const live=f.parts.filter(d=>!d.gone),captured=f.parts.filter(d=>d.disk),n=f.parts.length||1,progress=clamp((f.t-(f.breakTime??f.t))/.24,0,1);
  // Weighted outer portion of the simulated stream forms the bright, coherent head.
@@ -424,12 +454,13 @@ function labFluidFrame(f,g){
  const positions=pool.map(d=>d.disk?labCapturedPoint(d,Math.max(0,f.t-d.diskTime)):[d.x,d.y]).sort((a,b)=>Math.hypot(...b)-Math.hypot(...a));
  const outer=positions.slice(0,Math.max(1,Math.ceil(positions.length*.18))),p=outer.reduce((a,b)=>[a[0]+b[0]/outer.length,a[1]+b[1]/outer.length],[0,0]),initial=f.breakPos||p;
  const mix=smooth01(progress),head=flightProject(initial[0]*(1-mix)+p[0]*mix,initial[1]*(1-mix)+p[1]*mix,g);
- const last=positions.at(-1),tip=flightProject(...last,g),a=Math.atan2(head[1]-g.y,head[0]-g.x),b=Math.atan2(tip[1]-g.y,tip[0]-g.x),turn=shortAngle(b-a);
+ const prev=fluidVisuals.get(f)?.get('lab'),turn=nearStreamTurn(positions.map(p=>flightProject(...p,g)),head,center,prev?.turn??-1.1);
+ const shape=smoothFluidFrame(f,'lab',head,center,R,1,-1.1*(1-mix)+turn*mix);
  const lastCapture=captured.reduce((m,d)=>Math.max(m,d.diskTime||0),f.breakTime||0),age=live.length?0:Math.max(0,f.t-lastCapture),fraction=live.length/n;
  const alpha=live.length?Math.max(.16,Math.sqrt(fraction)):Math.exp(-age*1.15)*.18;
  const width=base*(.65*(1-mix)+mix*Math.max(.10,.65*Math.sqrt(fraction)))*Math.exp(-age*.65);
- fluidRibbon(head,center,R,width,1,alpha,Math.abs(turn)<.05?Math.sign((pool[0]?.diskOmega??(pool[0].x*pool[0].vy-pool[0].y*pool[0].vx))||1)*.75:turn,gas);
- if(live.length&&state.labels)leader('潮汐物质流',...head,head[0]+24,head[1]-22,1);
+ fluidRibbon(shape.head,center,R,width,shape.stretch,alpha,shape.turn,gas);
+ if(live.length&&state.labels)leader('潮汐物质流',...shape.head,shape.head[0]+24,shape.head[1]-22,1);
  return true
 }
 function infallArc(x,y,R,phase,age,strength=1){
@@ -521,19 +552,22 @@ function drawTidalDebris(h,x,y,R){
 function drawSandboxFluids(h,x,y,R){
  const groups=new Map(),center=[x,y],at=p=>project(p.map((v,k)=>v+h.p[k])).slice(0,2);
  for(const d of h.debris||[])if(d.fluid&&d.flowId){if(!groups.has(d.flowId))groups.set(d.flowId,[]);groups.get(d.flowId).push(d)}
+ const cache=fluidVisuals.get(h);if(cache)for(const id of cache.keys())if(!groups.has(id))cache.delete(id);
  for(const [id,ds] of groups){
   const core=state.bodies.find(b=>b.flowId===id),live=ds.filter(d=>!d.captured),captured=ds.filter(d=>d.captured);
   if(!core&&!live.length&&!captured.length)continue;
   const pool=live.length?live:captured,pts=pool.map(d=>at(d.captured?d.entry:d.p)).sort((a,b)=>Math.hypot(b[0]-x,b[1]-y)-Math.hypot(a[0]-x,a[1]-y));
   const top=pts.slice(0,Math.max(1,Math.ceil(pts.length*.22)));
   let head=core?project(core.p).slice(0,2):top.reduce((a,b)=>[a[0]+b[0]/top.length,a[1]+b[1]/top.length],[0,0]);
-  const tip=pts.at(-1)||head,a=Math.atan2(head[1]-y,head[0]-x),b=Math.atan2(tip[1]-y,tip[0]-x),turn=shortAngle(b-a);
+  const a=Math.atan2(head[1]-y,head[0]-x);
   const fraction=live.length/Math.max(1,ds.length),age=!core&&!live.length?Math.min(...captured.map(d=>Math.max(0,(d.age-d.captureAge)*12))):0;
   if(age>5)continue;
   const stretch=core?smooth01((core.tidalLost||0)*2.5):1,base=core?bodyRadius(core):clamp((ds[0].sourceWidth||6)*Math.sqrt(state.zoom)*Math.max(.10,.55*Math.sqrt(fraction)),.5,30);
   if(!core&&!live.length){const rr=R+Math.max(0,Math.hypot(head[0]-x,head[1]-y)-R)*Math.exp(-age*1.2);head=[x+rr*Math.cos(a+age*.35),y+rr*Math.sin(a+age*.35)]}
   const opacity=core?1:live.length?Math.max(.18,Math.sqrt(fraction)):.18*Math.exp(-age*1.2);
-  fluidRibbon(head,center,R,base*(core?1-.32*stretch:Math.exp(-age*.75)),stretch,opacity,Math.abs(turn)<.08?.8:turn,ds[0].gas)
+  const prev=fluidVisuals.get(h)?.get(id),turn=nearStreamTurn(pts,head,center,prev?.turn??0);
+  const shape=smoothFluidFrame(h,id,head,center,R,stretch,turn,!!core);
+  fluidRibbon(shape.head,center,R,base*(core?1-.32*shape.stretch:Math.exp(-age*.75)),shape.stretch,opacity,shape.turn,ds[0].gas)
  }
 }
 function drawImpacts(){
@@ -616,7 +650,7 @@ function editModal(){
  const labels=['质量（M☉）','半径（AU）','x（AU）','y（AU）','z（AU）','vx（AU/年）','vy（AU/年）','vz（AU/年）'],vals=[b.m,b.r,...b.p,...b.v];
  modal('天体编辑','<label>目标天体 <select id="editTarget">'+targetOptions()+'</select></label><div class="line-label">质量倍率 <output id="factorOut">1.00×</output></div><input class="wide" id="factor" type="range" min="-2" max="2" step=".1" value="0"><div class="compact"><button class="quiet" id="applyFactor">应用倍率</button><button class="quiet" id="circular">自动圆轨道</button></div><details><summary>高级参数</summary><label>名称<input id="editName" maxlength="48" value="'+esc(b.name)+'"></label><div class="formgrid">'+fields.map((k,i)=>'<label>'+labels[i]+'<input type="number" id="val_'+k+'" value="'+Number(vals[i].toPrecision(10))+'" step="any"></label>').join('')+'</div><button id="applyBody" class="primary">应用参数</button></details><button id="removeBody" class="footlink">删除选中天体</button>')
 }
-function details(){modal('观测说明','<p>拖动观测画面转动视角，滚轮或双指缩放。点标签按钮可隐藏标注，准星按钮可返回初始视角。</p><p><b>黑洞实验室</b>　黑洞以实时屏幕空间引力透镜近似扭曲背景，黑洞仅保留阴影、透镜与柔和光环，恒星和气态行星以连续发光物质流演示拉伸和消逝。束缚碎屑持续运行；进入捕获区的物质退出牛顿动力学计算，继承入射径向和切向速度，用同一连续坐标映射逐渐趋近黑洞阴影并红移；逃逸碎屑离开观测区。R₀ 表示太阳型恒星的参考潮汐半径；实际估算随类型与质量变化。</p><p><b>恒星一生</b>　三个质量对应三条示例路径。各阶段展示时间经过压缩。真实结局还受成分、失质量与伴星影响。</p><p><b>引力沙盒</b>　使用牛顿多体引力和碰撞合并，单位为 AU、年及太阳质量。显示尺寸经过放大，太阳系全景压缩了轨道距离。恒星吞噬采用放大的演示接触半径和连续碰撞检测；羽流和冲击波是视觉近似，质量与动量在合并时计入。追踪模式统一放大各天体；球面贴图、云层和光照随视角连续插值，黑洞仅对远处星空背景施加近似透镜效果，行星、轨道与名称保持正常绘制，物质捕获由三维距离独立判断，并使用程序吸积盘；演示捕获半径与阴影大小联动，不是真实事件视界。潮汐区内按接近程度逐级剥离物质，演示碎屑作为独立示踪粒子继续运动，捕获质量只计入一次，光迹作为外部观测近似继续显示。不是广义相对论光线追踪，未模拟真实吸积盘粘滞和引力波质量损失。</p><p><b>图像与资料</b>　行星和太阳表面取自 <a target="_blank" rel="noopener" href="https://www.solarsystemscope.com/textures/">Solar System Scope</a>（<a target="_blank" rel="noopener" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>），已缩放、转码和重新着色。黑洞、星云与背景在本项目中绘制。科学参考见 NASA 的 <a target="_blank" rel="noopener" href="https://science.nasa.gov/universe/black-holes/anatomy/">黑洞结构</a> 和 <a target="_blank" rel="noopener" href="https://science.nasa.gov/learn/heat/resource/journey-through-the-heliosphere-life-cycles-of-the-stars/">恒星演化</a>。</p><p class="mono">Cosmic Garden · v0.3.11</p>')}
+function details(){modal('观测说明','<p>拖动观测画面转动视角，滚轮或双指缩放。点标签按钮可隐藏标注，准星按钮可返回初始视角。</p><p><b>黑洞实验室</b>　黑洞以实时屏幕空间引力透镜近似扭曲背景，黑洞仅保留阴影、透镜与柔和光环，恒星和气态行星以连续发光物质流演示拉伸和消逝。束缚碎屑持续运行；进入捕获区的物质退出牛顿动力学计算，继承入射径向和切向速度，用同一连续坐标映射逐渐趋近黑洞阴影并红移；逃逸碎屑离开观测区。R₀ 表示太阳型恒星的参考潮汐半径；实际估算随类型与质量变化。</p><p><b>恒星一生</b>　三个质量对应三条示例路径。各阶段展示时间经过压缩。真实结局还受成分、失质量与伴星影响。</p><p><b>引力沙盒</b>　使用牛顿多体引力和碰撞合并，单位为 AU、年及太阳质量。显示尺寸经过放大，太阳系全景压缩了轨道距离。恒星吞噬采用放大的演示接触半径和连续碰撞检测；羽流和冲击波是视觉近似，质量与动量在合并时计入。追踪模式统一放大各天体；球面贴图、云层和光照随视角连续插值，黑洞仅对远处星空背景施加近似透镜效果，行星、轨道与名称保持正常绘制，物质捕获由三维距离独立判断，并使用程序吸积盘；演示捕获半径与阴影大小联动，不是真实事件视界。潮汐区内按接近程度逐级剥离物质，演示碎屑作为独立示踪粒子继续运动，捕获质量只计入一次，光迹作为外部观测近似继续显示。不是广义相对论光线追踪，未模拟真实吸积盘粘滞和引力波质量损失。</p><p><b>图像与资料</b>　行星和太阳表面取自 <a target="_blank" rel="noopener" href="https://www.solarsystemscope.com/textures/">Solar System Scope</a>（<a target="_blank" rel="noopener" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>），已缩放、转码和重新着色。黑洞、星云与背景在本项目中绘制。科学参考见 NASA 的 <a target="_blank" rel="noopener" href="https://science.nasa.gov/universe/black-holes/anatomy/">黑洞结构</a> 和 <a target="_blank" rel="noopener" href="https://science.nasa.gov/learn/heat/resource/journey-through-the-heliosphere-life-cycles-of-the-stars/">恒星演化</a>。</p><p class="mono">Cosmic Garden · v0.3.12</p>')}
 function save(){try{localStorage.setItem('cosmicGarden_v3',JSON.stringify({version:3,...state,impacts:[]}));toast('已保存当前实验')}catch{toast('此浏览器未能保存实验')}}
 const finite=Number.isFinite,vec=v=>Array.isArray(v)&&v.length===3&&v.every(finite),validBody=b=>b&&typeof b.name==='string'&&['star','planet','hole','moon'].includes(b.kind)&&finite(b.m)&&finite(b.r)&&b.m>0&&b.r>0&&vec(b.p)&&vec(b.v);
 function restore(){
@@ -673,7 +707,7 @@ canvas.addEventListener('keydown',e=>{const actions={' ':togglePlay,'+':()=>chan
 let last=null,sample=0,uiTime=0,frameErrorScene=null;
 function animate(now){
  requestAnimationFrame(animate);try{
- const real=last===null?0:Math.min(.08,(now-last)/1000);last=now;const dt=real*state.speed;
+ const real=last===null?0:Math.min(.08,(now-last)/1000);last=now;fluidFrameDt=real;const dt=real*state.speed;
  if(!state.paused&&dt>0){
   state.elapsed+=dt;sample+=real;for(const e of state.impacts||[])e.age+=real*Math.min(2,Math.sqrt(state.speed));
   if(state.id==='life'){if(state.phase<4){state.phaseTime+=dt;if(state.phaseTime>=12)setPhase(state.phase+1)}}
