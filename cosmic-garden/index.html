@@ -79,7 +79,7 @@ function queueImpact(target,victim,result,old){
  const t=C>0&&A>0?clamp((-B-Math.sqrt(Math.max(0,B*B-4*A*C)))/(2*A),0,1):0,d=d0.map((v,k)=>v+delta[k]*t),r=length3(d),u=r>1e-10?d.map(v=>v/r):[1,0,0];
  const giant=victim.kind==='star'||victim.m>=.00003||['jupiter','saturn','uranus','neptune'].includes(victim.tex),energy=clamp((victim.m/3e-6)**.18,.55,3.4),count=giant?96:36;
  const particles=Array.from({length:count},(_,i)=>({angle:i*2.399963, speed:.32+((i*53)%count)/count*1.25,life:.65+((i*29)%count)/count*.8,sz:.4+((i*19)%count)/count*1.7}));
- const effects=state.impacts||(state.impacts=[]);effects.push({target:result,u,t:state.elapsed,giant,energy,particles,color:victim.color,stellar:target.kind==='star'});
+ const effects=state.impacts||(state.impacts=[]);effects.push({target:result,u,t:state.elapsed,age:0,giant,energy,particles,color:victim.color,stellar:target.kind==='star',tex:victim.tex,kind:victim.kind,sizeRatio:bodyBase(victim)/Math.max(1,bodyBase(target))});
  if(effects.length>18)effects.shift()
 }
 function mergeEncounters(bs,old){
@@ -475,11 +475,12 @@ function drawTidalDebris(h,x,y,R){
  }ctx.restore()
 }
 function drawImpacts(){
- state.impacts=(state.impacts||[]).filter(e=>state.elapsed-e.t<6&&state.bodies.includes(e.target));
+ state.impacts=(state.impacts||[]).filter(e=>e.age<6&&state.bodies.includes(e.target));
  ctx.save();ctx.globalCompositeOperation='screen';ctx.lineCap='round';
  for(const e of state.impacts){
-  const age=Math.max(0,state.elapsed-e.t),p=project(e.target.p),r=bodyRadius(e.target),v=project(e.target.p.map((x,k)=>x+e.u[k]*.04)),a=Math.atan2(v[1]-p[1],v[0]-p[0]),x=p[0]+Math.cos(a)*r*.88,y=p[1]+Math.sin(a)*r*.88;
+  const age=Math.max(0,e.age),p=project(e.target.p),r=bodyRadius(e.target),v=project(e.target.p.map((x,k)=>x+e.u[k]*.04)),a=Math.atan2(v[1]-p[1],v[0]-p[0]),x=p[0]+Math.cos(a)*r*.88,y=p[1]+Math.sin(a)*r*.88;
   const flash=Math.exp(-age*3.7),scale=(e.giant?.9:.46)*r*e.energy;
+  if(age<.7){const fade=clamp(1-age/.7,0,1),rr=Math.max(.8,r*e.sizeRatio*fade**.65),off=r*(1+.65*e.sizeRatio*fade);ctx.save();ctx.globalCompositeOperation='source-over';ctx.globalAlpha=fade*.85;const px=p[0]+Math.cos(a)*off,py=p[1]+Math.sin(a)*off;if(e.kind==='star')star(px,py,rr,'natural');else sphere(px,py,rr,e.tex||'earth',state.elapsed*.013);ctx.restore()}
   glow(x,y,Math.max(1,scale*(.45+age*.6)),[[0,'rgba(255,250,221,'+(.92*flash)+')'],[.23,'rgba(255,173,70,'+(.68*flash)+')'],[.64,'rgba(255,79,20,'+(.27*flash)+')'],[1,'rgba(255,80,0,0)']]);
   if(age<1.8){const wave=Math.max(1,scale*(.18+age*.94));ctx.strokeStyle='rgba(255,203,117,'+(.58*Math.exp(-age*2))+')';ctx.lineWidth=Math.max(.6,r*.045*(1-age*.4));ctx.beginPath();ctx.ellipse(x,y,wave,wave*.42,a+Math.PI/2,-Math.PI*.92,Math.PI*.92);ctx.stroke()}
   for(const q of e.particles){const f=age/(3.8*q.life);if(f>=1)continue;const ang=a+Math.sin(q.angle)*(e.giant?1.44:1.1),dist=scale*q.speed*(1-Math.exp(-age*.75)),px=x+Math.cos(ang)*dist,py=y+Math.sin(ang)*dist,alpha=(1-f)**1.65,sz=Math.max(.35,q.sz*(e.giant?1.35:.8)*Math.sqrt(state.zoom)*(1-.65*f));
@@ -552,7 +553,7 @@ function editModal(){
  const labels=['质量（M☉）','半径（AU）','x（AU）','y（AU）','z（AU）','vx（AU/年）','vy（AU/年）','vz（AU/年）'],vals=[b.m,b.r,...b.p,...b.v];
  modal('天体编辑','<label>目标天体 <select id="editTarget">'+targetOptions()+'</select></label><div class="line-label">质量倍率 <output id="factorOut">1.00×</output></div><input class="wide" id="factor" type="range" min="-2" max="2" step=".1" value="0"><div class="compact"><button class="quiet" id="applyFactor">应用倍率</button><button class="quiet" id="circular">自动圆轨道</button></div><details><summary>高级参数</summary><label>名称<input id="editName" maxlength="48" value="'+esc(b.name)+'"></label><div class="formgrid">'+fields.map((k,i)=>'<label>'+labels[i]+'<input type="number" id="val_'+k+'" value="'+Number(vals[i].toPrecision(10))+'" step="any"></label>').join('')+'</div><button id="applyBody" class="primary">应用参数</button></details><button id="removeBody" class="footlink">删除选中天体</button>')
 }
-function details(){modal('观测说明','<p>拖动观测画面转动视角，滚轮或双指缩放。点标签按钮可隐藏标注，准星按钮可返回初始视角。</p><p><b>黑洞实验室</b>　黑洞以实时屏幕空间引力透镜近似扭曲背景，吸积盘为连续程序绘制。束缚碎屑持续运行；进入捕获区的物质退出牛顿动力学计算，继承入射径向和切向速度，用同一连续坐标映射逐渐趋近黑洞阴影并红移；逃逸碎屑离开观测区。R₀ 表示太阳型恒星的参考潮汐半径；实际估算随类型与质量变化。</p><p><b>恒星一生</b>　三个质量对应三条示例路径。各阶段展示时间经过压缩。真实结局还受成分、失质量与伴星影响。</p><p><b>引力沙盒</b>　使用牛顿多体引力和碰撞合并，单位为 AU、年及太阳质量。显示尺寸经过放大，太阳系全景压缩了轨道距离。恒星吞噬采用放大的演示接触半径和连续碰撞检测；羽流和冲击波是视觉近似，质量与动量在合并时计入。追踪模式统一放大各天体；球面贴图、云层和光照随视角连续插值，黑洞仅对远处星空背景施加近似透镜效果，行星、轨道与名称保持正常绘制，物质捕获由三维距离独立判断，并使用程序吸积盘；演示捕获半径与阴影大小联动，不是真实事件视界。潮汐区内按接近程度逐级剥离物质，演示碎屑作为独立示踪粒子继续运动，捕获质量只计入一次，光迹作为外部观测近似继续显示。不是广义相对论光线追踪，未模拟真实吸积盘粘滞和引力波质量损失。</p><p><b>图像与资料</b>　行星和太阳表面取自 <a target="_blank" rel="noopener" href="https://www.solarsystemscope.com/textures/">Solar System Scope</a>（<a target="_blank" rel="noopener" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>），已缩放、转码和重新着色。黑洞、星云与背景在本项目中绘制。科学参考见 NASA 的 <a target="_blank" rel="noopener" href="https://science.nasa.gov/universe/black-holes/anatomy/">黑洞结构</a> 和 <a target="_blank" rel="noopener" href="https://science.nasa.gov/learn/heat/resource/journey-through-the-heliosphere-life-cycles-of-the-stars/">恒星演化</a>。</p><p class="mono">Cosmic Garden · v0.3.9</p>')}
+function details(){modal('观测说明','<p>拖动观测画面转动视角，滚轮或双指缩放。点标签按钮可隐藏标注，准星按钮可返回初始视角。</p><p><b>黑洞实验室</b>　黑洞以实时屏幕空间引力透镜近似扭曲背景，吸积盘为连续程序绘制。束缚碎屑持续运行；进入捕获区的物质退出牛顿动力学计算，继承入射径向和切向速度，用同一连续坐标映射逐渐趋近黑洞阴影并红移；逃逸碎屑离开观测区。R₀ 表示太阳型恒星的参考潮汐半径；实际估算随类型与质量变化。</p><p><b>恒星一生</b>　三个质量对应三条示例路径。各阶段展示时间经过压缩。真实结局还受成分、失质量与伴星影响。</p><p><b>引力沙盒</b>　使用牛顿多体引力和碰撞合并，单位为 AU、年及太阳质量。显示尺寸经过放大，太阳系全景压缩了轨道距离。恒星吞噬采用放大的演示接触半径和连续碰撞检测；羽流和冲击波是视觉近似，质量与动量在合并时计入。追踪模式统一放大各天体；球面贴图、云层和光照随视角连续插值，黑洞仅对远处星空背景施加近似透镜效果，行星、轨道与名称保持正常绘制，物质捕获由三维距离独立判断，并使用程序吸积盘；演示捕获半径与阴影大小联动，不是真实事件视界。潮汐区内按接近程度逐级剥离物质，演示碎屑作为独立示踪粒子继续运动，捕获质量只计入一次，光迹作为外部观测近似继续显示。不是广义相对论光线追踪，未模拟真实吸积盘粘滞和引力波质量损失。</p><p><b>图像与资料</b>　行星和太阳表面取自 <a target="_blank" rel="noopener" href="https://www.solarsystemscope.com/textures/">Solar System Scope</a>（<a target="_blank" rel="noopener" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>），已缩放、转码和重新着色。黑洞、星云与背景在本项目中绘制。科学参考见 NASA 的 <a target="_blank" rel="noopener" href="https://science.nasa.gov/universe/black-holes/anatomy/">黑洞结构</a> 和 <a target="_blank" rel="noopener" href="https://science.nasa.gov/learn/heat/resource/journey-through-the-heliosphere-life-cycles-of-the-stars/">恒星演化</a>。</p><p class="mono">Cosmic Garden · v0.3.10</p>')}
 function save(){try{localStorage.setItem('cosmicGarden_v3',JSON.stringify({version:3,...state,impacts:[]}));toast('已保存当前实验')}catch{toast('此浏览器未能保存实验')}}
 const finite=Number.isFinite,vec=v=>Array.isArray(v)&&v.length===3&&v.every(finite),validBody=b=>b&&typeof b.name==='string'&&['star','planet','hole','moon'].includes(b.kind)&&finite(b.m)&&finite(b.r)&&b.m>0&&b.r>0&&vec(b.p)&&vec(b.v);
 function restore(){
@@ -611,7 +612,7 @@ function animate(now){
  requestAnimationFrame(animate);try{
  const real=last===null?0:Math.min(.08,(now-last)/1000);last=now;const dt=real*state.speed;
  if(!state.paused&&dt>0){
-  state.elapsed+=dt;sample+=real;
+  state.elapsed+=dt;sample+=real;for(const e of state.impacts||[])e.age+=real*Math.min(2,Math.sqrt(state.speed));
   if(state.id==='life'){if(state.phase<4){state.phaseTime+=dt;if(state.phaseTime>=12)setPhase(state.phase+1)}}
   else if(state.id==='lab'){const t=dt*.88,n=Math.ceil(t/.018);for(let i=0;i<n;i++)advanceFlight(t/n)}
   else{const t=Math.min(dt*.080,.00058*(state.bodies.length>45?16:64)),n=Math.max(1,Math.ceil(t/.00058));for(let i=0;i<n;i++)physics(t/n)}
