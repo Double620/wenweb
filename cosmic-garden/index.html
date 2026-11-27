@@ -219,7 +219,7 @@ function advanceFlight(dt){
  const f=state.flight;if(!f)return;
  f.done=false;f.t+=dt;const b=encounterPosition(f);
  const tidal=f.tidal??1;if(!f.broken&&f.q<tidal&&b.r<=tidal){
-  f.broken=true;f.breakTime=f.t;f.breakPos=[b.x,b.y];
+  f.broken=true;f.breakTime=f.t;f.breakPos=[b.x,b.y];if(f.kind==='rock')f.breakSpin=state.elapsed*.02;
   const count=clamp(Math.round(110*(f.size??1)**.55),40,175);for(let j=0;j<count;j++){const u=(j+.5)/count-.5,angle=j*2.39996,spread=.6+.4*Math.cos(angle),dx=b.x/b.r,dy=b.y/b.r;
    const speed=1+u*.13;
    f.parts.push({x:b.x+dx*u*.115*(f.size??1)+Math.cos(angle)*.009,y:b.y+dy*u*.115*(f.size??1)+Math.sin(angle)*.009,vx:b.vx*speed+dx*u*.10,vy:b.vy*speed+dy*u*.10,w:spread,tail:[[b.x,b.y]]})}
@@ -326,17 +326,31 @@ function leader(text,px,py,lx,ly,side=1){
  ctx.save();ctx.font=(W<500?'10':'12')+'px system-ui';ctx.textAlign=side>0?'left':'right';ctx.strokeStyle='rgba(200,209,207,.57)';ctx.lineWidth=.7;ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(lx-side*10,ly);ctx.lineTo(lx,ly);ctx.stroke();dot(px,py,1.8,'#c8c7ad');ctx.shadowColor='#040913';ctx.shadowBlur=4;ctx.fillStyle='#d5d9d8';ctx.fillText(text,lx+side*4,ly+4);ctx.restore()
 }
 let starLayer=null;
-function denseStars(){const w=Math.ceil(W*1.18),h=Math.ceil(H*1.18);if(starLayer&&starLayer.width===w&&starLayer.height===h)return starLayer;
- const c=document.createElement('canvas');c.width=w;c.height=h;const g=c.getContext('2d');let seed=91371;
+function denseStars(){const w=Math.ceil(W*1.18),h=Math.ceil(H*1.18);if(starLayer&&starLayer.width===Math.ceil(w*ratio)&&starLayer.height===Math.ceil(h*ratio))return starLayer;
+ const c=document.createElement('canvas');c.width=Math.ceil(w*ratio);c.height=Math.ceil(h*ratio);const g=c.getContext('2d');g.scale(ratio,ratio);let seed=91371;
  const rand=()=>{seed=(Math.imul(seed,1664525)+1013904223)>>>0;return seed/4294967296};
  const count=Math.min(7500,Math.max(1500,Math.floor(w*h/220)));
  for(let i=0;i<count;i++){const x=rand()*w,y=rand()*h,b=rand(),r=.30+1.15*b**7;g.fillStyle='rgba('+ (i%5===0?'255,198,141':i%3===0?'162,197,255':'230,239,255')+','+(.24+.70*b)+')';g.beginPath();g.arc(x,y,r,0,TAU);g.fill();if(b>.985){g.fillStyle='rgba(220,232,255,.16)';g.beginPath();g.arc(x,y,r*2.6,0,TAU);g.fill()}}
  return starLayer=c}
+let skyFrame=null,skyVersion=0;
+function paintSky(g,stars){
+ g.fillStyle='#080c13';g.fillRect(0,0,W,H);
+ const im=pictures.sky,dx=Math.sin(state.yaw)*W*.025,dy=Math.sin(state.pitch-.43)*H*.025;
+ if(ready(im)){const s=Math.max(W/im.width,H/im.height)*1.09;g.drawImage(im,(W-im.width*s)/2+dx,(H-im.height*s)/2+dy,im.width*s,im.height*s)}
+ if(stars){const c=denseStars(),w=c.width/ratio,h=c.height/ratio;g.drawImage(c,(W-w)/2+dx*2,(H-h)/2+dy*2,w,h)}
+}
+function lensSky(){
+ const key=[W,H,canvas.width,canvas.height,state.yaw,state.pitch,ready(pictures.sky)].join('/');
+ if(skyFrame?.key===key)return skyFrame;
+ const c=skyFrame?.c||document.createElement('canvas');
+ if(c.width!==canvas.width)c.width=canvas.width;if(c.height!==canvas.height)c.height=canvas.height;
+ const g=c.getContext('2d',{alpha:false,willReadFrequently:true});
+ g.setTransform(ratio,0,0,ratio,0,0);paintSky(g,true);
+ return skyFrame={key,c,g,version:++skyVersion,data:null}
+}
 function sky(){
- ctx.fillStyle='#080c13';ctx.fillRect(0,0,W,H);const im=pictures.sky;
- const dx=Math.sin(state.yaw)*W*.025,dy=Math.sin(state.pitch-.43)*H*.025;
- if(ready(im)){const s=Math.max(W/im.width,H/im.height)*1.09;ctx.drawImage(im,(W-im.width*s)/2+dx,(H-im.height*s)/2+dy,im.width*s,im.height*s)}
- if(state.id==='lab'||state.bodies.some(b=>b.kind==='hole')){const c=denseStars();ctx.drawImage(c,(W-c.width)/2+dx*2,(H-c.height)/2+dy*2)}
+ if(state.id==='lab'||state.bodies.some(b=>b.kind==='hole'))ctx.drawImage(lensSky().c,0,0,W,H);
+ else paintSky(ctx,false)
 }
 function labGeometry(){const size=Math.min(W*1.10,H*1.73)*state.zoom;return {x:W*.50,y:H*(W<520?.55:.54),size,roll:-.14+state.yaw*.35}}
 function rotPoint(p,q,x,y,a){return [x+p*Math.cos(a)-q*Math.sin(a),y+p*Math.sin(a)+q*Math.cos(a)]}
@@ -353,34 +367,93 @@ function holeInclination(){return clamp(72+(state.pitch-.43)*30,18,88)}
 let lensEngine=null;
 const sandboxLensCache=new Map();
 function makeLens(){
- const c=document.createElement('canvas'),src=document.createElement('canvas'),g=src.getContext('2d',{willReadFrequently:true});
+ const c=document.createElement('canvas');
  let gl=c.getContext('webgl',{alpha:false,antialias:false,preserveDrawingBuffer:true}),program,tex;
  if(gl)try{
   const compile=(type,code)=>{const sh=gl.createShader(type);gl.shaderSource(sh,code);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(sh));return sh};
   program=gl.createProgram();gl.attachShader(program,compile(gl.VERTEX_SHADER,'attribute vec2 a; varying vec2 uv; void main(){uv=(a+1.0)*0.5;gl_Position=vec4(a,0.0,1.0);}'));
-  gl.attachShader(program,compile(gl.FRAGMENT_SHADER,'precision mediump float; varying vec2 uv; uniform sampler2D scene; void main(){vec2 p=(uv-0.5)*2.0;float r=length(p);float h=0.235;float fade=1.0-smoothstep(0.53,0.96,r);float rr=max(r,0.002);vec2 q=0.5+0.5*p*(1.0-0.175*fade/(rr*rr));vec3 col=texture2D(scene,clamp(q,0.001,0.999)).rgb;float ring=exp(-pow((r-h*1.055)/(h*0.035),2.0));col+=vec3(0.45,0.32,0.22)*ring*0.32;col*=smoothstep(h*0.99,h*1.018,r);gl_FragColor=vec4(col,1.0);}'));
+  gl.attachShader(program,compile(gl.FRAGMENT_SHADER,`precision highp float;
+   varying vec2 uv; uniform sampler2D scene; uniform vec4 crop; uniform vec2 screen; uniform vec3 lens;
+   void main(){
+    vec2 pixel=crop.xy+vec2(uv.x,1.0-uv.y)*crop.zw;
+    vec2 p=(pixel-lens.xy)/lens.z;float r=length(p);
+    float f=1.0-smoothstep(0.53,0.96,r);
+    vec2 sampleAt=(lens.xy+p*lens.z*(1.0-.175*f/max(dot(p,p),.000004)))/screen;
+    vec2 q=1.0-abs(mod(sampleAt,2.0)-1.0);
+    vec3 color=texture2D(scene,q).rgb;
+    float rimDistance=(r-.235*1.055)/(.235*.035);float rim=exp(-rimDistance*rimDistance);
+    gl_FragColor=vec4((color+vec3(.45,.32,.22)*rim*.32)*smoothstep(.23265,.23923,r),1.0);
+   }`));
   gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));gl.useProgram(program);
   const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);const a=gl.getAttribLocation(program,'a');gl.enableVertexAttribArray(a);gl.vertexAttribPointer(a,2,gl.FLOAT,false,0,0);
-  tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,true);
+  tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL,false);
  }catch(e){gl=null}
- const fallback=document.createElement('canvas'),fg=fallback.getContext('2d');return {c,src,g,gl,tex,fallback,fg};
+ const fallback=document.createElement('canvas'),fg=fallback.getContext('2d');return {c,gl,tex,fallback,fg,
+  limit:gl?Math.min(gl.getParameter(gl.MAX_TEXTURE_SIZE),...gl.getParameter(gl.MAX_VIEWPORT_DIMS)):0,
+  crop:gl?.getUniformLocation(program,'crop'),screen:gl?.getUniformLocation(program,'screen'),lens:gl?.getUniformLocation(program,'lens')};
 }
+// The texture covers the screen in device pixels. Render only the visible lens
+// rectangle, even when most of its diameter lies outside a zoomed viewport.
 function lensBackground(x,y,R,cacheKey=null){
- if(![x,y,R].every(Number.isFinite)||R<=0)return;
- if(R<1||x+R*4.26<0||y+R*4.26<0||x-R*4.26>W||y-R*4.26>H)return;
- const L=R/.235,D=L*2;
- const cached=cacheKey&&sandboxLensCache.get(cacheKey),now=performance.now();
- if(cached&&now-cached.at<180&&Math.hypot(x-cached.x,y-cached.y)<Math.max(2,R*.12)&&Math.abs(R-cached.r)<Math.max(1,R*.12)&&Math.abs(state.yaw-cached.yaw)<.025&&Math.abs(state.pitch-cached.pitch)<.025){ctx.save();ctx.beginPath();ctx.arc(x,y,L*.965,0,TAU);ctx.clip();ctx.drawImage(cached.c,x-L,y-L,D,D);ctx.restore();return}
- let e=lensEngine||(lensEngine=makeLens());const gpu=!cacheKey&&e.gl&&!e.gl.isContextLost();
- const n=cacheKey?Math.min(128,Math.max(32,Math.ceil(D/24)*24)):gpu?Math.min(512,Math.max(96,Math.ceil(D*ratio/64)*64)):Math.min(160,Math.max(64,Math.ceil(D/32)*32));
- if(e.src.width!==n){e.src.width=e.src.height=n}
- e.g.fillStyle='#080c13';e.g.fillRect(0,0,n,n);e.g.drawImage(canvas,-(x-L)*n/D,-(y-L)*n/D,W*n/D,H*n/D);
+ if(![x,y,R].every(Number.isFinite)||R<1)return;
+ const sky=lensSky(),L=R/.235;
+ const left=Math.max(0,Math.floor((x-L)*ratio)),top=Math.max(0,Math.floor((y-L)*ratio));
+ const w=Math.min(canvas.width,Math.ceil((x+L)*ratio))-left,h=Math.min(canvas.height,Math.ceil((y+L)*ratio))-top;
+ if(w<=0||h<=0)return;
+ const cached=cacheKey&&sandboxLensCache.get(cacheKey);
+ function paint(image,l,t,width,height){
+  ctx.save();ctx.beginPath();ctx.arc(x,y,L*.965,0,TAU);ctx.clip();
+  ctx.drawImage(image,l/ratio,t/ratio,width/ratio,height/ratio);ctx.restore()
+ }
+ if(cached&&cached.sky===sky.version&&Math.max(Math.abs(x-cached.x),Math.abs(y-cached.y),Math.abs(R-cached.r)/.235)*ratio<.45){
+  paint(cached.c,cached.left,cached.top,cached.w,cached.h);return
+ }
+ const e=lensEngine||(lensEngine=makeLens()),gl=e.gl;
+ const gpu=gl&&!gl.isContextLost()&&Math.max(canvas.width,canvas.height)<=e.limit;
  let out;
- if(gpu){const gl=e.gl;if(e.c.width!==n){e.c.width=e.c.height=n}gl.viewport(0,0,n,n);gl.bindTexture(gl.TEXTURE_2D,e.tex);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,e.src);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);out=e.c}
- else{if(e.fallback.width!==n)e.fallback.width=e.fallback.height=n;const src=e.g.getImageData(0,0,n,n).data,im=e.fg.createImageData(n,n),dst=im.data;
- for(let j=0;j<n;j++)for(let i=0;i<n;i++){const u=(i+.5)/n*2-1,v=(j+.5)/n*2-1,r=Math.hypot(u,v),t=clamp((r-.53)/.43,0,1),f=1-t*t*(3-2*t),k=1-.175*f/Math.max(r*r,.000004),sx=clamp((.5+.5*u*k)*n-.5,0,n-1),sy=clamp((.5+.5*v*k)*n-.5,0,n-1),a=Math.floor(sx),b=Math.floor(sy),aa=Math.min(n-1,a+1),bb=Math.min(n-1,b+1),fx=sx-a,fy=sy-b,mask=clamp((r-.23265)/.00658,0,1),o=4*(j*n+i);for(let z=0;z<3;z++)dst[o+z]=mask*((src[4*(b*n+a)+z]*(1-fx)+src[4*(b*n+aa)+z]*fx)*(1-fy)+(src[4*(bb*n+a)+z]*(1-fx)+src[4*(bb*n+aa)+z]*fx)*fy);dst[o+3]=255}e.fg.putImageData(im,0,0);out=e.fallback}
- if(cacheKey){const c=cached?.c||document.createElement('canvas');if(c.width!==n||c.height!==n)c.width=c.height=n;const cg=c.getContext('2d');cg.clearRect(0,0,n,n);cg.drawImage(out,0,0);if(sandboxLensCache.size>=16&&!sandboxLensCache.has(cacheKey))sandboxLensCache.delete(sandboxLensCache.keys().next().value);sandboxLensCache.set(cacheKey,{c,at:now,x,y,r:R,yaw:state.yaw,pitch:state.pitch});out=c}
- ctx.save();ctx.beginPath();ctx.arc(x,y,L*.965,0,TAU);ctx.clip();ctx.drawImage(out,x-L,y-L,D,D);ctx.restore();
+ if(gpu){
+  if(e.c.width!==w)e.c.width=w;if(e.c.height!==h)e.c.height=h;
+  gl.viewport(0,0,w,h);gl.bindTexture(gl.TEXTURE_2D,e.tex);
+  if(e.sky!==sky.version){gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,sky.c);e.sky=sky.version}
+  gl.uniform4f(e.crop,left,top,w,h);gl.uniform2f(e.screen,canvas.width,canvas.height);
+  gl.uniform3f(e.lens,x*ratio,y*ratio,L*ratio);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);out=e.c
+ }else{
+  // Bound software work by visible area. Bilinear lookups use the original
+  // high-resolution starfield regardless of the size of the output patch.
+  const scale=Math.min(1,Math.sqrt(1500000/(w*h))),nx=Math.max(1,Math.round(w*scale)),ny=Math.max(1,Math.round(h*scale));
+  out=e.fallback;if(out.width!==nx)out.width=nx;if(out.height!==ny)out.height=ny;
+  const sw=sky.c.width,sh=sky.c.height;
+  sky.data??=sky.g.getImageData(0,0,sw,sh).data;
+  const src=sky.data,im=e.fg.createImageData(nx,ny),dst=im.data,cx=x*ratio,cy=y*ratio,extent=L*ratio;
+  for(let j=0;j<ny;j++){
+   const dy=top+(j+.5)*h/ny-cy;
+   for(let i=0;i<nx;i++){
+    const dx=left+(i+.5)*w/nx-cx,rr=(dx*dx+dy*dy)/(extent*extent),o=(j*nx+i)*4;
+    dst[o+3]=255;if(rr<.23265**2||rr>.966**2)continue;
+    const r=Math.sqrt(rr),fade=1-smooth01((r-.53)/.43),k=1-.175*fade/rr;
+    // Mirror the continuation of the starfield at a screen edge, like the shader.
+    const px=clamp(sw-Math.abs(((cx+dx*k)%(2*sw)+2*sw)%(2*sw)-sw)-.5,0,sw-1);
+    const py=clamp(sh-Math.abs(((cy+dy*k)%(2*sh)+2*sh)%(2*sh)-sh)-.5,0,sh-1);
+    const ix=Math.floor(px),iy=Math.floor(py),fx=px-ix,fy=py-iy;
+    const a=(iy*sw+ix)*4,b=a+(ix+1<sw?4:0),c=a+(iy+1<sh?sw*4:0),d=c+b-a;
+    const mask=smooth01((r-.23265)/.00658);
+    for(let ch=0;ch<3;ch++)dst[o+ch]=mask*((src[a+ch]*(1-fx)+src[b+ch]*fx)*(1-fy)+(src[c+ch]*(1-fx)+src[d+ch]*fx)*fy)
+   }
+  }
+  e.fg.putImageData(im,0,0);
+ }
+ if(cacheKey){
+  const c=cached?.c||document.createElement('canvas');
+  if(c.width!==out.width)c.width=out.width;if(c.height!==out.height)c.height=out.height;
+  c.getContext('2d',{alpha:false}).drawImage(out,0,0);sandboxLensCache.delete(cacheKey);
+  let area=c.width*c.height;
+  for(const v of sandboxLensCache.values())area+=v.c.width*v.c.height;
+  while(sandboxLensCache.size&&(area>4000000||sandboxLensCache.size>=16)){
+   const [id,v]=sandboxLensCache.entries().next().value;area-=v.c.width*v.c.height;sandboxLensCache.delete(id)
+  }
+  sandboxLensCache.set(cacheKey,{c,sky:sky.version,x,y,r:R,left,top,w,h});out=c
+ }
+ paint(out,left,top,w,h)
 }
 function holeArt(x,y,w,roll,inc=holeInclination(),radius=w*LAB_SHADOW,lens=true){
  const R=Math.max(1,radius);if(lens)lensBackground(x,y,R);
@@ -606,14 +679,14 @@ function fluidRibbon(head,center,R,width,stretch,opacity,turn,tex,tone,visual){
 function labFluidRadius(f,g){return clamp(g.size*.019*(f.size??1),f.kind==='gas'?6:8,38)}
 function drawLabBody(f,b,p,g){
  const tidal=f.tidal??1,disrupts=f.q<tidal;
- const r=f.kind!=='rock'&&disrupts?labFluidRadius(f,g):clamp(g.size*.010*(f.size??1),2,24);
- glow(...p,r*3,[[0,'#ebf7ff'],[.3,'#aed7ffe0'],[1,'#7eb8fd00']]);
+ const r=f.kind==='rock'?rockRadius(f,g):disrupts?labFluidRadius(f,g):clamp(g.size*.010*(f.size??1),2,24);
+ if(f.kind!=='rock')glow(...p,r*3,[[0,'#ebf7ff'],[.3,'#aed7ffe0'],[1,'#7eb8fd00']]);
  const inner=flightProject(b.x*.999,b.y*.999,g);
  const stretch=disrupts?smooth01((tidal*1.55-b.r)/(tidal*.55)):0;
  ctx.save();ctx.translate(...p);ctx.rotate(Math.atan2(p[1]-inner[1],p[0]-inner[0]));
  ctx.scale(1+.48*stretch,1);
  if(f.kind==='star')star(0,0,r,'white');
- else sphere(0,0,r,f.kind==='gas'?'jupiter':'earth',state.elapsed*.02);
+ else{sphere(0,0,r,f.kind==='gas'?'jupiter':'earth',state.elapsed*.02);if(f.kind==='rock'){ctx.scale(r,r);crustSeams(stretch)}}
  ctx.restore()
 }
 function labFluidFrame(f,g){
@@ -668,14 +741,95 @@ function labCapturedPoint(d,t){
  const a=a0+omega*(1-Math.exp(-.65*t))/.65;
  return [r*Math.cos(a),r*Math.sin(a)]
 }
-function labInfall(d,f,g,R){
- const t=Math.max(0,f.t-(d.diskTime??f.t)),point=u=>flightProject(...labCapturedPoint(d,u),g),entry=point(0),head=point(t);
- const size=clamp(g.size*.0014,.7,2.4)*d.w+.3;
- const red=Math.round(209-112*(1-Math.exp(-t*.35))),blue=Math.round(150-105*(1-Math.exp(-t*.35))),alpha=.695*Math.exp(-t*.27)+.025;
- ctx.save();ctx.lineCap='round';ctx.lineJoin='round';
- if(state.trails&&d.tail.length>1&&t<3){ctx.beginPath();d.tail.forEach((v,i)=>{const q=flightProject(...v,g);i?ctx.lineTo(...q):ctx.moveTo(...q)});ctx.lineTo(...entry);ctx.strokeStyle='rgba(244,153,73,'+(.13*Math.exp(-t*1.3))+')';ctx.lineWidth=1;ctx.stroke()}
- if(t>0){ctx.beginPath();const start=Math.max(0,t-5);ctx.moveTo(...point(start));for(let j=1;j<=48;j++)ctx.lineTo(...point(start+(t-start)*j/48));ctx.lineWidth=Math.max(.45,size*.78*Math.exp(-t*.23));ctx.strokeStyle='rgba(255,'+red+','+blue+','+alpha*.68+')';ctx.stroke()}
- dot(...head,Math.max(.32,size*Math.exp(-t*.37)),'rgba(255,'+red+','+blue+','+alpha+')');ctx.restore();
+// Shared fracture boundaries keep each piece of crust aligned with the original surface.
+const crustPlates=(()=>{
+ const inner=[],outer=[],joints=[],plates=[];
+ for(let i=0;i<6;i++){
+  const a=i*TAU/6+.23,r=.35+.10*Math.sin(2.4*i),t=a+.17*Math.sin(i*1.8);
+  inner.push([r*Math.cos(a),r*Math.sin(a)]);
+  joints.push([.67*Math.cos(t),.67*Math.sin(t)]);
+  outer.push([1.6*Math.cos(a-.08),1.6*Math.sin(a-.08)])
+ }
+ function add(vertices,cx,cy){
+  const path=new Path2D();path.moveTo(...vertices[0]);for(const v of vertices.slice(1))path.lineTo(...v);path.closePath();
+  plates.push({path,cx,cy})
+ }
+ add(inner,0,0);
+ for(let i=0;i<6;i++){
+  const j=(i+1)%6,a=(i+.5)*TAU/6+.23;
+  add([inner[i],joints[i],outer[i],outer[j],joints[j],inner[j]],.65*Math.cos(a),.65*Math.sin(a))
+ }
+ return plates
+})();
+function rockRadius(f,g){return clamp(g.size*.032*(f.size??.42),8,36)}
+function crustSeams(heat){
+ if(heat<=0)return;
+ ctx.save();ctx.beginPath();ctx.arc(0,0,1,0,TAU);ctx.clip();
+ ctx.lineJoin='round';ctx.strokeStyle='rgba(36,24,27,'+(.62*heat)+')';ctx.lineWidth=.050;
+ for(const part of crustPlates)ctx.stroke(part.path);
+ ctx.strokeStyle='rgba(255,179,92,'+(.70*heat*heat)+')';ctx.lineWidth=.019;
+ for(const part of crustPlates)ctx.stroke(part.path);
+ ctx.restore()
+}
+function rockChip(x,y,r,angle,heat,alpha){
+ if(alpha<.008||r<.12)return;
+ ctx.save();ctx.globalAlpha*=alpha;ctx.translate(x,y);ctx.rotate(angle);
+ ctx.beginPath();ctx.moveTo(-r,-.23*r);ctx.lineTo(-.25*r,-.80*r);ctx.lineTo(.92*r,-.31*r);ctx.lineTo(.60*r,.67*r);ctx.lineTo(-.56*r,.72*r);ctx.closePath();
+ ctx.fillStyle=heat>.48?'#ba7451':'#888085';ctx.fill();
+ ctx.beginPath();ctx.moveTo(-r,-.23*r);ctx.lineTo(-.25*r,-.80*r);ctx.lineTo(.92*r,-.31*r);ctx.lineTo(-.18*r,-.07*r);
+ ctx.fillStyle=heat>.48?'#ffbf82':'#c7b7a3';ctx.fill();ctx.restore()
+}
+function drawRockBreakup(f,g,R){
+ const age=Math.max(0,f.t-(f.breakTime??0)),r=rockRadius(f,g),mix=smooth01(age/.26);
+ const initial=f.breakPos||[f.q,0],incoming=encounterPosition(f),origin=flightProject(...initial,g);
+ const axis=Math.atan2(origin[1]-g.y,origin[0]-g.x),cs=Math.cos(axis),sn=Math.sin(axis);
+ const stretch=1.48,spin=f.breakSpin??0;
+ const picks=crustPlates.map((_,i)=>Math.min(f.parts.length-1,Math.floor([.49,.90,.57,.17,.06,.37,.79][i]*f.parts.length)));
+ let label=null;
+ ctx.save();ctx.beginPath();ctx.rect(0,0,W,H);ctx.arc(g.x,g.y,R*.993,0,TAU);ctx.clip('evenodd');
+ for(let i=0;i<f.parts.length;i++){
+  const d=f.parts[i];if(d.gone&&!d.disk)continue;
+  const t=d.disk?Math.max(0,f.t-d.diskTime):0,fade=1-smooth01(t/3.6);
+  if(fade<=0)continue;
+  const plateIndex=picks.indexOf(i),large=plateIndex>=0;
+  if(!large&&i%3!==0)continue;
+  const point=d.disk?labCapturedPoint(d,t):[d.x,d.y],p=flightProject(incoming.x*(1-mix)+point[0]*mix,incoming.y*(1-mix)+point[1]*mix,g);
+  const heat=smooth01((1.65*LAB_CAPTURE-Math.hypot(...point))/LAB_CAPTURE);
+  const plate=large?crustPlates[plateIndex]:null;
+  const ox=large?plate.cx:Math.cos(i*2.4)*.7,oy=large?plate.cy:Math.sin(i*2.4)*.7;
+  const spread=(1+.48*smooth01(age/.38))*Math.exp(-t*1.8);
+  const x=p[0]+spread*r*(cs*ox*stretch-sn*oy),y=p[1]+spread*r*(sn*ox*stretch+cs*oy);
+  // Continue from the capture intersection on the very same orbit as the chip.
+  if(d.disk&&t>.001){
+   const start=Math.max(0,t-.65),n=Math.ceil(4+14*Math.min(1,t/.65));
+   ctx.beginPath();
+   for(let j=0;j<=n;j++){
+    const u=start+(t-start)*j/n,v=flightProject(...labCapturedPoint(d,u),g),s=spread*Math.exp(1.8*(t-u));
+    const X=v[0]+s*r*(cs*ox*stretch-sn*oy),Y=v[1]+s*r*(sn*ox*stretch+cs*oy);
+    if(j)ctx.lineTo(X,Y);else ctx.moveTo(X,Y)
+   }
+   ctx.lineCap='round';ctx.lineWidth=large?clamp(r*.10,.6,1.7):.55;
+   ctx.strokeStyle='rgba(245,153,88,'+((large?.40:.14)*fade*smooth01(t/.18))+')';ctx.lineTo(x,y);ctx.stroke()
+  }else if(state.trails&&mix>.01&&d.tail.length>1&&!large){
+   ctx.beginPath();
+   for(let j=0;j<d.tail.length;j++){const v=flightProject(...d.tail[j],g);if(j)ctx.lineTo(...v);else ctx.moveTo(...v)}
+   ctx.lineTo(x,y);ctx.lineWidth=.6;ctx.strokeStyle='rgba(207,169,132,'+(.19*mix)+')';ctx.stroke()
+  }
+  if(large){
+   const scale=(1-.16*smooth01(age/.65))*Math.exp(-t*1.32);
+   ctx.save();ctx.globalAlpha=fade;ctx.translate(x,y);
+   ctx.rotate(axis+Math.sin(i*1.913+.6)*age*1.75*mix);ctx.scale(stretch*r*scale,r*scale);ctx.translate(-ox,-oy);
+   ctx.clip(plate.path);ctx.beginPath();ctx.arc(0,0,1,0,TAU);ctx.clip();
+   // Draw in surface pixels to retain the same texture sampling as the intact body.
+   ctx.save();ctx.scale(1/r,1/r);sphere(0,0,r,'earth',spin);ctx.restore();
+   ctx.lineWidth=.061;ctx.strokeStyle='rgba(255,164,83,'+(.46+.50*heat)+')';ctx.stroke(plate.path);ctx.restore();
+   if(!d.gone&&plateIndex===0)label=[x,y]
+  }else{
+   rockChip(x,y,clamp(r*.15*d.w,.42,2.4)*Math.exp(-.85*t),i+age*Math.sin(i)*2,heat,mix*fade*.86)
+  }
+ }
+ ctx.restore();
+ if(label)leader('岩质碎块',...label,label[0]+24,label[1]-22,1)
 }
 function projectedHoleRadius(b,p){const q=holeCapture(b);let r=0;for(let k=0;k<3;k++)for(const sign of [-1,1]){const v=[...b.p];v[k]+=sign*q;const z=project(v);r=Math.max(r,Math.hypot(z[0]-p[0],z[1]-p[1]))}return Math.max(1.8,r)}
 let labBackdrop=null;
@@ -703,10 +857,7 @@ function lab(){
  if(!f.broken){const b=encounterPosition(f),p=flightProject(b.x,b.y,g);
   if(state.trails&&f.trail.length>1){ctx.strokeStyle='#a1cde38a';ctx.lineWidth=1.3;ctx.beginPath();f.trail.forEach((v,i)=>{const q=flightProject(...v,g);i?ctx.lineTo(...q):ctx.moveTo(...q)});ctx.stroke()}
   drawLabBody(f,b,p,g);leader(f.kind==='rock'?'岩石行星':f.kind==='gas'?'气态行星':'投放的恒星',...p,p[0]+29,p[1]-20,1);
- }else{const fade=clamp(1-(f.t-(f.breakTime??-1))/.24,0,1);if(fade>0&&f.breakPos){const p=flightProject(...f.breakPos,g),b=encounterPosition(f),q=flightProject(b.x,b.y,g);ctx.save();ctx.globalAlpha=fade;ctx.translate(...q);ctx.rotate(Math.atan2(q[1]-g.y,q[0]-g.x));ctx.scale(1.48,1);const rr=clamp(g.size*.010*(f.size??1),2,24);if(f.kind==='rock'||f.kind==='gas')sphere(0,0,rr,f.kind==='gas'?'jupiter':'earth',state.elapsed*.02);else star(0,0,rr,'white');ctx.restore()}ctx.save();ctx.globalCompositeOperation='lighter';for(const d of f.parts){if(d.disk){labInfall(d,f,g,R);continue}if(d.gone)continue;const p=flightProject(d.x,d.y,g);
-   if(d.tail.length>1&&state.trails){ctx.beginPath();d.tail.forEach((v,i)=>{const q=flightProject(...v,g);i?ctx.lineTo(...q):ctx.moveTo(...q)});ctx.lineWidth=1;ctx.strokeStyle='rgba(244,153,73,.13)';ctx.stroke()}
-   dot(...p,clamp(g.size*.0014,.7,2.4)*d.w+.3,'rgba(255,209,150,'+(.72*(1-fade))+')')}ctx.restore();
-  const middle=f.parts.find(p=>!p.gone);if(middle){const p=flightProject(middle.x,middle.y,g);leader('潮汐碎屑流',...p,p[0]+24,p[1]-27,1)}}
+ }else drawRockBreakup(f,g,R)
 }
 function life(){
  const cx=W*.50,cy=H*.54,base=Math.min(W*.26,H*.30)*state.zoom,t=state.elapsed,phase=state.phase,m=state.mass;
@@ -738,18 +889,19 @@ function bodyRadius(b){
 function line3(list,color){if(list.length<2)return;ctx.strokeStyle=color;ctx.lineWidth=.85;ctx.beginPath();list.forEach((p,i)=>{const [x,y]=project(p);i?ctx.lineTo(x,y):ctx.moveTo(x,y)});ctx.stroke()}
 const colorCSS=n=>'#'+(n>>>0).toString(16).padStart(6,'0').slice(-6);
 function drawTidalDebris(h,x,y,R){
- const c=holeCapture(h),at=p=>project(p.map((v,k)=>v+h.p[k])).slice(0,2); // depth is not a Canvas radius
- ctx.save();ctx.lineCap='round';ctx.globalCompositeOperation='screen';
+ const at=p=>project(p.map((v,k)=>v+h.p[k])).slice(0,2); // depth is not a Canvas radius
+ ctx.save();ctx.beginPath();ctx.rect(0,0,W,H);ctx.arc(x,y,R*.99,0,TAU);ctx.clip('evenodd');ctx.lineCap='round';ctx.globalCompositeOperation='screen';
  for(const d of h.debris||[]){
   if(d.fluid)continue;
   const age=d.captured?(d.age-d.captureAge)*12:0,entry=d.captured?at(d.entry):at(d.p),phase=Math.atan2(entry[1]-y,entry[0]-x),r0=Math.hypot(entry[0]-x,entry[1]-y);
+  if(age>=8)continue;
   const dir=d.captured?at(d.entry.map((v,k)=>v+d.entryV[k]*.0001)):entry;
   const omega=d.captured?Math.atan2(Math.sin(Math.atan2(dir[1]-y,dir[0]-x)-phase),Math.cos(Math.atan2(dir[1]-y,dir[0]-x)-phase))/.0012:0;
   const point=t=>{const a=phase+omega*(1-Math.exp(-t*.9))/.9,rr=R+(r0-R)*Math.exp(-t*.9);return [x+rr*Math.cos(a),y+rr*Math.sin(a)]};
-  const head=d.captured?point(age):entry,alpha=d.captured?.8*Math.exp(-age*.5)+.018:.8,sz=clamp(d.size*Math.sqrt(state.zoom)*.6,.5,5);
+  const head=d.captured?point(age):entry,alpha=.92*(1-smooth01(age/8)),sz=clamp(d.size*Math.sqrt(state.zoom)*.6,.5,5);
   if(d.tail.length>0&&state.trails&&age<2){ctx.beginPath();d.tail.forEach((p,i)=>{const q=at(p);i?ctx.lineTo(...q):ctx.moveTo(...q)});ctx.lineTo(...entry);ctx.strokeStyle=colorCSS(d.color)+'55';ctx.lineWidth=Math.max(.45,sz*.45);ctx.stroke()}
   if(d.captured&&age>0){ctx.beginPath();const start=Math.max(0,age-4);for(let i=0;i<=24;i++){const q=point(start+(age-start)*i/24);i?ctx.lineTo(...q):ctx.moveTo(...q)}ctx.strokeStyle='rgba(255,149,78,'+alpha*.7+')';ctx.lineWidth=Math.max(.35,sz*Math.exp(-age*.5));ctx.stroke()}
-  dot(...head,Math.max(.3,sz*Math.exp(-age*.7)),d.captured?'rgba(255,178,100,'+alpha+')':colorCSS(d.color)+'cc');
+  ctx.save();ctx.globalCompositeOperation='source-over';rockChip(...head,sz*Math.exp(-age*.48),d.size*2.4+d.age*18,clamp(2-r0/R,0,1),alpha);ctx.restore();
  }ctx.restore()
 }
 function drawSandboxFluids(h,x,y,R){
@@ -806,6 +958,7 @@ function solar(){
   else{const h=heaviest(b),hp=h?project(h.p):[x-100,y-60],lamp=Math.atan2(hp[1]-y,hp[0]-x);
    if(b.tex==='saturn'){ctx.save();ctx.translate(x,y);ctx.rotate(-.28);for(let j=0;j<8;j++){ctx.beginPath();ctx.ellipse(0,0,r*(1.26+j*.095),r*(1.26+j*.095)*Math.max(.035,Math.abs(Math.sin(state.pitch))*.54),0,Math.PI,TAU);ctx.strokeStyle=j===4?'#373532':'#bea987';ctx.lineWidth=Math.max(.65,r*.075);ctx.stroke()}ctx.restore()}
    sphere(x,y,r,b.tex,state.elapsed*.013+state.yaw/TAU,'natural',lamp);
+   if(b.tidalLost>0&&!isFluidBody(b)){ctx.save();ctx.translate(x,y);ctx.scale(r,r);crustSeams(smooth01(b.tidalLost*2));ctx.restore()}
    if(b.tex==='saturn'){ctx.save();ctx.translate(x,y);ctx.rotate(-.28);for(let j=0;j<8;j++){ctx.beginPath();ctx.ellipse(0,0,r*(1.26+j*.095),r*(1.26+j*.095)*Math.max(.035,Math.abs(Math.sin(state.pitch))*.54),0,0,Math.PI);ctx.strokeStyle=j===4?'#4a453a':'#d7c49a';ctx.lineWidth=Math.max(.65,r*.075);ctx.stroke()}ctx.restore()}
   }
   if(i===state.sel&&b.kind!=='hole'){ctx.setLineDash([3,4]);ctx.strokeStyle='#dfb77fbb';ctx.beginPath();ctx.arc(x,y,r+5,0,TAU);ctx.stroke();ctx.setLineDash([])}
@@ -917,7 +1070,7 @@ function animate(now){
  if(!state.paused&&dt>0){
   state.elapsed+=dt;sample+=real;for(const e of state.impacts||[])e.age+=real*Math.min(2,Math.sqrt(state.speed));
   if(state.id==='life'){if(state.phase<4){state.phaseTime+=dt;if(state.phaseTime>=12)setPhase(state.phase+1)}}
-  else if(state.id==='lab'){const f=state.flight,b=f&&encounterPosition(f),slow=f&&f.kind!=='rock'&&f.q<(f.tidal??1)?(f.broken?1:smooth01(((f.tidal??1)*1.9-b.r)/((f.tidal??1)*.9))):0;const t=dt*(.88-.49*slow),n=Math.ceil(t/.018);for(let i=0;i<n;i++)advanceFlight(t/n)}
+  else if(state.id==='lab'){const f=state.flight,b=f&&encounterPosition(f),slow=f&&f.q<(f.tidal??1)?(f.broken?1:smooth01(((f.tidal??1)*1.9-b.r)/((f.tidal??1)*.9))):0;const t=dt*(.88-.49*slow),n=Math.ceil(t/.018);for(let i=0;i<n;i++)advanceFlight(t/n)}
   else{const t=Math.min(dt*.080,.00058*(state.bodies.length>45?16:64)),n=Math.max(1,Math.ceil(t/.00058));for(let i=0;i<n;i++)physics(t/n)}
   if(sample>.044){sample=0;if(isNbody()){for(const b of state.bodies){b.history.push([...b.p]);if(b.history.length>240)b.history.shift()}}else if(state.flight){const f=state.flight,p=encounterPosition(f);f.trail.push([p.x,p.y]);if(f.trail.length>100)f.trail.shift();if(f.broken)for(const d of f.parts){if(d.gone)continue;d.tail.push([d.x,d.y]);if(d.tail.length>13)d.tail.shift()}}}
  }
