@@ -17,7 +17,7 @@ const ART={"mapclouds":"data:image/webp;base64,UklGRkpKAQBXRUJQVlA4ID5KAQCQcwOdA
 const $=id=>document.getElementById(id), TAU=Math.PI*2, G=TAU*TAU;
 const clamp=(x,a,b)=>Math.max(a,Math.min(b,x)), length3=v=>Math.hypot(...v);
 const sceneData={
- lab:['黑洞实验室','BLACK HOLE LAB','让一颗恒星掠过黑洞，追踪它最后的轨迹。'],
+ lab:['黑洞实验室','BLACK HOLE LAB','自定义投放天体的质量与掠过距离，观察潮汐撕裂或完整逃逸。'],
  life:['恒星一生','STELLAR EVOLUTION','改变恒星的初始质量，看星云走向不同的结局。'],
  solar:['太阳系','SOLAR SYSTEM','沿八大行星的轨道巡游，也可以创造自己的天体。'],
  binary:['双星系统','BINARY STARS','观察两颗恒星如何围绕共同的质心运行。'],
@@ -30,14 +30,14 @@ const planets=[
  ['天王星','uranus',19.2,.000044,.00017,0x88d6db],['海王星','neptune',30.1,.000051,.000165,0x749cf5]];
 const catalog=Object.fromEntries(planets.map(([name,tex,a,m,r,color])=>[name,{tex,m,r,color,kind:'planet'}]));
 Object.assign(catalog,{'太阳':{tex:'sun',m:1,r:.00465,color:0xffc77c,kind:'star'},'黑洞':{tex:'bh',m:1,r:1.97e-8,color:0xe6b57a,kind:'hole'},'月球':{tex:'moon',m:3.7e-8,r:1.16e-5,color:0xbbb9ba,kind:'moon'}});
-const state={id:'lab',time:0,elapsed:0,paused:false,speed:1,labels:true,trails:true,bodies:[],sel:0,track:false,zoom:1,yaw:0,pitch:.43,mode:'near',flight:null,mass:1,phase:0,phaseTime:0,log:[]};
+const state={id:'lab',time:0,elapsed:0,paused:false,speed:1,labels:true,trails:true,bodies:[],sel:0,track:false,zoom:1,yaw:0,pitch:.43,mode:'near',flight:null,labKind:'star',labMass:1,labQ:.68,impacts:[],mass:1,phase:0,phaseTime:0,log:[]};
 const isNbody=()=>!['lab','life'].includes(state.id);
 function record(msg){state.log.unshift({t:state.elapsed,msg});state.log=state.log.slice(0,5);showLog()}
 function makeBody(name,kind,m,r,p,v,color,tex){return {name,kind,m,r,p:[...p],v:[...v],color,tex:tex||catalog[name]?.tex||({star:'sun',hole:'bh',moon:'moon',planet:'earth'})[kind],history:[]}}
 function resetView(){state.zoom=1;state.yaw=0;state.pitch=.43;state.track=false;}
 function startScene(id){
  sandboxLensCache.clear();
- Object.assign(state,{id,time:0,elapsed:0,paused:false,speed:1,bodies:[],sel:0,flight:null,mode:'near',phase:0,phaseTime:0,mass:1,log:[]}); resetView();
+ Object.assign(state,{id,time:0,elapsed:0,paused:false,speed:1,bodies:[],sel:0,flight:null,mode:'near',labKind:'star',labMass:1,labQ:.68,impacts:[],phase:0,phaseTime:0,mass:1,log:[]}); resetView();
  const add=(...args)=>state.bodies.push(makeBody(...args));
  if(id==='solar'||id==='hole'){
   const hole=id==='hole';add(hole?'黑洞':'太阳',hole?'hole':'star',1,hole?1.97e-8:.00465,[0,0,0],[0,0,0],0xffc77c);
@@ -60,7 +60,7 @@ function kick(bs,dt){
 // Approximate capture radius, deliberately enlarged for interactive AU-scale demonstrations.
 function holeCapture(h){return Math.max(h.r*3,.18*Math.cbrt(h.m))}
 function encounterLimit(a,b){
- if(a.kind!=='hole'&&b.kind!=='hole')return a.r+b.r;
+ if(a.kind!=='hole'&&b.kind!=='hole'){const star=a.kind==='star'?a:b.kind==='star'?b:null,other=star===a?b:a;if(star&&other.kind!=='star')return Math.max(star.r,Math.min(.24,star.r*18))+other.r;return a.r+b.r;}
  if(a.kind==='hole'&&b.kind==='hole')return holeCapture(a)+holeCapture(b);
  const h=a.kind==='hole'?a:b,o=h===a?b:a;
  return Math.max(holeCapture(h),o.r*Math.cbrt(2*h.m/o.m),h.r+o.r);
@@ -73,17 +73,27 @@ function sweptDistance(a,b,old){
  const t=vv?clamp(-start.reduce((sum,x,k)=>sum+x*v[k],0)/vv,0,1):0;
  return length3(start.map((x,k)=>x+t*v[k]));
 }
+function queueImpact(target,victim,result,old){
+ const d0=(old?.get(victim)||victim.p).map((v,k)=>v-(old?.get(target)||target.p)[k]),d1=victim.p.map((v,k)=>v-target.p[k]),delta=d1.map((v,k)=>v-d0[k]);
+ const lim=encounterLimit(target,victim),A=delta.reduce((n,v)=>n+v*v,0),B=2*d0.reduce((n,v,k)=>n+v*delta[k],0),C=d0.reduce((n,v)=>n+v*v,0)-lim*lim;
+ const t=C>0&&A>0?clamp((-B-Math.sqrt(Math.max(0,B*B-4*A*C)))/(2*A),0,1):0,d=d0.map((v,k)=>v+delta[k]*t),r=length3(d),u=r>1e-10?d.map(v=>v/r):[1,0,0];
+ const giant=victim.kind==='star'||victim.m>=.00003||['jupiter','saturn','uranus','neptune'].includes(victim.tex),energy=clamp((victim.m/3e-6)**.18,.55,3.4),count=giant?96:36;
+ const particles=Array.from({length:count},(_,i)=>({angle:i*2.399963, speed:.32+((i*53)%count)/count*1.25,life:.65+((i*29)%count)/count*.8,sz:.4+((i*19)%count)/count*1.7}));
+ const effects=state.impacts||(state.impacts=[]);effects.push({target:result,u,t:state.elapsed,giant,energy,particles,color:victim.color,stellar:target.kind==='star'});
+ if(effects.length>18)effects.shift()
+}
 function mergeEncounters(bs,old){
  let changed=false;
  for(let i=0;i<bs.length;i++)for(let j=bs.length-1;j>i;j--){
   const a=bs[i],b=bs[j],black=a.kind==='hole'||b.kind==='hole';
   if(black&&a.kind!==b.kind)continue; // Mixed encounters are handled by progressive stripping.
-   if(sweptDistance(a,b,black?old:null)>encounterLimit(a,b))continue;
-  const m=a.m+b.m,heavy=a.m>=b.m?a:b,h=a.kind==='hole'&&b.kind==='hole'?heavy:a.kind==='hole'?a:b;
+   if(sweptDistance(a,b,old)>encounterLimit(a,b))continue;
+  const m=a.m+b.m,heavy=!black&&a.kind!==b.kind&&(a.kind==='star'||b.kind==='star')?(a.kind==='star'?a:b):a.m>=b.m?a:b,h=a.kind==='hole'&&b.kind==='hole'?heavy:a.kind==='hole'?a:b;
   const oldSel=bs[state.sel],both=a.kind==='hole'&&b.kind==='hole';
   const r=black?Math.max(1.97e-8*m,h.r*m/h.m):Math.cbrt(a.r**3+b.r**3);
   const name=black?h.name:heavy.name;
-  const msg=both?a.name+' 与 '+b.name+' 合并为更大的黑洞。':black?(h===a?b.name:a.name)+' 的物质进入 '+h.name+' 的吸积区。':a.name+' 与 '+b.name+' 合并。';
+   const victim=heavy===a?b:a;if(!black)queueImpact(heavy,victim,a,old);
+  const msg=both?a.name+' 与 '+b.name+' 合并为更大的黑洞。':black?(h===a?b.name:a.name)+' 的物质进入 '+h.name+' 的吸积区。':heavy.kind==='star'&&victim.kind!=='star'?victim.name+' 被 '+heavy.name+' 吞噬，产生高温碎屑和冲击。':a.name+' 与 '+b.name+' 合并。';
   const other=h===a?b:a;
   const infall=black?[...(a.infall||[]),...(b.infall||[])]:[];
   if(black&&!both){const d=other.p.map((v,k)=>v-h.p[k]);infall.push({t:state.elapsed,phase:Math.atan2(d[2],d[0]),tilt:Math.atan2(d[1],Math.hypot(d[0],d[2]))});}
@@ -142,7 +152,7 @@ function advanceDebris(h,dt){
 function physics(dt){
  const bs=state.bodies;let changed=mergeEncounters(bs,null);
  changed=stripBodies(bs,null)||changed;
- kick(bs,dt/2);const old=bs.some(b=>b.kind==='hole')?new Map(bs.map(b=>[b,[...b.p]])):null;
+ kick(bs,dt/2);const old=new Map(bs.map(b=>[b,[...b.p]]));
  for(const b of bs)for(let k=0;k<3;k++)b.p[k]+=b.v[k]*dt;
  changed=mergeEncounters(bs,old)||changed;changed=stripBodies(bs,old)||changed;
  kick(bs,dt/2);for(const h of bs)if(h.kind==='hole')advanceDebris(h,dt);
@@ -178,10 +188,17 @@ function encounterPosition(f){
  const q=f.q,d=2*Math.sinh(Math.asinh(1.5*(f.t-f.peri)/Math.sqrt(2*q**3))/3),rate=1/(Math.sqrt(2*q**3)*(1+d*d));
  return {x:q*(1-d*d),y:2*q*d,vx:-2*q*d*rate,vy:2*q*rate,r:q*(1+d*d)};
 }
+function labParameters(kind,mass){
+ const m=kind==='star'?mass:mass*3.003e-6;
+ const radius=kind==='star'?mass**.8:kind==='gas'?.10045*(mass/318)**.08:.00916*mass**.27;
+ return {m,radius,tidal:Math.max(.44,radius/Math.cbrt(m)),size:clamp(radius**.28,.42,2.15)};
+}
 function launch(){
- const q=state.mode==='near'?.68:1.62;
- state.flight={q,t:0,peri:Math.sqrt(2*q**3)*(1.5+1.5**3/3),parts:[],trail:[],broken:false,passed:false,done:false};
- state.paused=false;record(q<1?'近掠恒星已投放。':'远掠恒星已投放。');syncUI();
+ const kind=$('labKind')?.value||state.labKind,mass=$('labMass')?.valueAsNumber??state.labMass,q=$('labQ')?.valueAsNumber??state.labQ;
+ if(!['star','rock','gas'].includes(kind)||!Number.isFinite(mass)||mass<(kind==='star'?.08:.01)||mass>(kind==='star'?100:5000)||!Number.isFinite(q)||q<.25||q>8){toast('请输入有效质量及最近距离（0.25–8）');return}
+ Object.assign(state,{labKind:kind,labMass:mass,labQ:q});
+ state.flight={q,kind,mass,...labParameters(kind,mass),t:0,peri:Math.sqrt(2*q**3)*(1.5+1.5**3/3),parts:[],trail:[],broken:false,passed:false,done:false};
+ state.paused=false;record('已投放'+({star:'恒星',rock:'岩石行星',gas:'气态行星'}[kind])+'，最近距离 '+q.toFixed(2)+' R₀。');syncUI()
 }
 function segmentRadius(x,y,X,Y){const dx=X-x,dy=Y-y,q=dx*dx+dy*dy,t=q?clamp(-(x*dx+y*dy)/q,0,1):0;return Math.hypot(x+t*dx,y+t*dy)}
 const LAB_CAPTURE=.36;
@@ -200,14 +217,14 @@ function captureIntersection(x,y,X,Y){
 function advanceFlight(dt){
  const f=state.flight;if(!f)return;
  f.done=false;f.t+=dt;const b=encounterPosition(f);
- if(!f.broken&&f.q<1&&b.r<=1){
+ const tidal=f.tidal??1;if(!f.broken&&f.q<tidal&&b.r<=tidal){
   f.broken=true;f.breakTime=f.t;f.breakPos=[b.x,b.y];
-  for(let j=0;j<110;j++){const u=(j+.5)/110-.5,angle=j*2.39996,spread=.6+.4*Math.cos(angle),dx=b.x/b.r,dy=b.y/b.r;
+  const count=clamp(Math.round(110*(f.size??1)**.55),40,175);for(let j=0;j<count;j++){const u=(j+.5)/count-.5,angle=j*2.39996,spread=.6+.4*Math.cos(angle),dx=b.x/b.r,dy=b.y/b.r;
    const speed=1+u*.13;
-   f.parts.push({x:b.x+dx*u*.115+Math.cos(angle)*.009,y:b.y+dy*u*.115+Math.sin(angle)*.009,vx:b.vx*speed+dx*u*.10,vy:b.vy*speed+dy*u*.10,w:spread,tail:[[b.x,b.y]]})}
-  record('越过潮汐半径，恒星被拉伸成碎屑流。')
+   f.parts.push({x:b.x+dx*u*.115*(f.size??1)+Math.cos(angle)*.009,y:b.y+dy*u*.115*(f.size??1)+Math.sin(angle)*.009,vx:b.vx*speed+dx*u*.10,vy:b.vy*speed+dy*u*.10,w:spread,tail:[[b.x,b.y]]})}
+  record('越过潮汐半径，天体被拉伸成碎屑流。')
  }
- if(!f.passed&&f.t>f.peri){f.passed=true;if(!f.broken)record('通过近心点，恒星完整掠过。')}
+ if(!f.passed&&f.t>f.peri){f.passed=true;if(!f.broken)record('通过近心点，天体完整掠过。')}
  if(f.broken){
   let captured=0;
   for(const p of f.parts){
@@ -226,7 +243,7 @@ function advanceFlight(dt){
    }
   }
   if(captured&&!f.captureLogged){f.captureLogged=true;record('部分碎屑已被捕获，近视界光迹逐渐拉长、红移；其余碎屑继续运动。')}
- }else if(f.t>f.peri+4&&!f.departureLogged){f.departureLogged=true;record('恒星正在远离黑洞，继续观测。')}
+ }else if(f.t>f.peri+4&&!f.departureLogged){f.departureLogged=true;record('天体正在远离黑洞，继续观测。')}
 }
 
 
@@ -400,7 +417,7 @@ function labInfall(d,f,g,R){
 function projectedHoleRadius(b,p){const q=holeCapture(b);let r=0;for(let k=0;k<3;k++)for(const sign of [-1,1]){const v=[...b.p];v[k]+=sign*q;const z=project(v);r=Math.max(r,Math.hypot(z[0]-p[0],z[1]-p[1]))}return Math.max(1.8,r)}
 function lab(){
  const g=labGeometry(),inc=holeInclination();
- const f0=state.flight;if(f0&&f0.q>1){const r=encounterPosition(f0).r,limit=Math.max(1,Math.min(W,H)*.38),dist=g.size*LAB_SHADOW*Math.asinh(r/.12)/Math.asinh(2),start=limit*.72;if(dist>start){const apparent=limit-(limit-start)*Math.exp(-(dist-start)/(limit-start));g.size*=apparent/dist}}
+ const f0=state.flight;if(f0&&!f0.broken){const r=encounterPosition(f0).r,limit=Math.max(1,Math.min(W,H)*.38),dist=g.size*LAB_SHADOW*Math.asinh(r/.12)/Math.asinh(2),start=limit*.72;if(dist>start){const apparent=limit-(limit-start)*Math.exp(-(dist-start)/(limit-start));g.size*=apparent/dist}}
  holeArt(g.x,g.y,g.size,g.roll,inc);
  const R=g.size*LAB_SHADOW;
  const f=state.flight,active=!!f;
@@ -408,8 +425,8 @@ function lab(){
   const q=rotPoint(.22*g.size,.01*g.size,g.x,g.y,g.roll);leader('吸积盘',...q,g.x+.28*g.size,g.y+.10*g.size,1);return}
  if(!f.broken){const b=encounterPosition(f),p=flightProject(b.x,b.y,g);
   if(state.trails&&f.trail.length>1){ctx.strokeStyle='#a1cde38a';ctx.lineWidth=1.3;ctx.beginPath();f.trail.forEach((v,i)=>{const q=flightProject(...v,g);i?ctx.lineTo(...q):ctx.moveTo(...q)});ctx.stroke()}
-  const r=clamp(g.size*.010,4,14);glow(...p,r*3,[[0,'#ebf7ff'],[.3,'#aed7ffe0'],[1,'#7eb8fd00']]);ctx.save();ctx.translate(...p);const p0=flightProject(b.x*.999,b.y*.999,g);ctx.rotate(Math.atan2(p[1]-p0[1],p[0]-p0[0]));const u=f.q<1?clamp((1.55-b.r)/.55,0,1):0;ctx.scale(1+.48*u*u*(3-2*u),1);star(0,0,r,'white');ctx.restore();leader('投放的恒星',...p,p[0]+29,p[1]-20,1);
- }else{const fade=clamp(1-(f.t-(f.breakTime??-1))/.24,0,1);if(fade>0&&f.breakPos){const p=flightProject(...f.breakPos,g),b=encounterPosition(f),q=flightProject(b.x,b.y,g);ctx.save();ctx.globalAlpha=fade;ctx.translate(...q);ctx.rotate(Math.atan2(q[1]-g.y,q[0]-g.x));ctx.scale(1.48,1);star(0,0,clamp(g.size*.010,4,14),'white');ctx.restore()}ctx.save();ctx.globalCompositeOperation='lighter';for(const d of f.parts){if(d.disk){labInfall(d,f,g,R);continue}if(d.gone)continue;const p=flightProject(d.x,d.y,g);
+  const r=clamp(g.size*.010*(f.size??1),2,24);glow(...p,r*3,[[0,'#ebf7ff'],[.3,'#aed7ffe0'],[1,'#7eb8fd00']]);ctx.save();ctx.translate(...p);const p0=flightProject(b.x*.999,b.y*.999,g);ctx.rotate(Math.atan2(p[1]-p0[1],p[0]-p0[0]));const tidal=f.tidal??1,u=f.q<tidal?clamp((tidal*1.55-b.r)/(tidal*.55),0,1):0;ctx.scale(1+.48*u*u*(3-2*u),1);if(f.kind==='rock'||f.kind==='gas')sphere(0,0,r,f.kind==='gas'?'jupiter':'earth',state.elapsed*.02);else star(0,0,r,'white');ctx.restore();leader(f.kind==='rock'?'岩石行星':f.kind==='gas'?'气态行星':'投放的恒星',...p,p[0]+29,p[1]-20,1);
+ }else{const fade=clamp(1-(f.t-(f.breakTime??-1))/.24,0,1);if(fade>0&&f.breakPos){const p=flightProject(...f.breakPos,g),b=encounterPosition(f),q=flightProject(b.x,b.y,g);ctx.save();ctx.globalAlpha=fade;ctx.translate(...q);ctx.rotate(Math.atan2(q[1]-g.y,q[0]-g.x));ctx.scale(1.48,1);const rr=clamp(g.size*.010*(f.size??1),2,24);if(f.kind==='rock'||f.kind==='gas')sphere(0,0,rr,f.kind==='gas'?'jupiter':'earth',state.elapsed*.02);else star(0,0,rr,'white');ctx.restore()}ctx.save();ctx.globalCompositeOperation='lighter';for(const d of f.parts){if(d.disk){labInfall(d,f,g,R);continue}if(d.gone)continue;const p=flightProject(d.x,d.y,g);
    if(d.tail.length>1&&state.trails){ctx.beginPath();d.tail.forEach((v,i)=>{const q=flightProject(...v,g);i?ctx.lineTo(...q):ctx.moveTo(...q)});ctx.lineWidth=1;ctx.strokeStyle='rgba(244,153,73,.13)';ctx.stroke()}
    dot(...p,clamp(g.size*.0014,.7,2.4)*d.w+.3,'rgba(255,209,150,'+(.72*(1-fade))+')')}ctx.restore();
   const middle=f.parts.find(p=>!p.gone);if(middle){const p=flightProject(middle.x,middle.y,g);leader('潮汐碎屑流',...p,p[0]+24,p[1]-27,1)}}
@@ -428,13 +445,13 @@ function relative(p){const b=state.bodies[state.sel];return state.track&&b?p.map
 function project(p){
  const a=relative(p),r=length3(a),wide=state.id==='solar'||state.id==='hole';
  const scale=Math.min(W*.45,H*.61)*state.zoom,unit=state.track?1.7:wide?30:state.id==='binary'?5.5:1.4;
- const s=scale*(wide&&!state.track?Math.log1p(r)/Math.max(r,1e-8)/Math.log1p(unit):1/unit),cs=Math.cos(state.yaw-.18),sn=Math.sin(state.yaw-.18);
+ const s=scale*(wide&&!state.track?Math.asinh(r/.20)/Math.max(r,1e-8)/Math.asinh(unit/.20):1/unit),cs=Math.cos(state.yaw-.18),sn=Math.sin(state.yaw-.18);
  const xx=a[0]*cs-a[2]*sn,zz=a[0]*sn+a[2]*cs,yy=a[1]*Math.cos(state.pitch)-zz*Math.sin(state.pitch);
  return [W*.50+xx*s,H*.56-yy*s,zz*Math.cos(state.pitch)+a[1]*Math.sin(state.pitch)]
 }
 function bodyBase(b){
  const unit=clamp(Math.min(W,H)/660,.82,1.5);
- return unit*(b.kind==='star'?15*clamp(Math.cbrt(b.m),.55,3):b.kind==='hole'?13*clamp(Math.cbrt(b.m),.55,4):clamp(4+5.0*Math.log10(1+b.m/3e-6),4,18));
+ return unit*(b.kind==='star'?32*clamp((b.r/.00465)**.35,.58,2.8):b.kind==='hole'?13*clamp(Math.cbrt(b.m),.55,4):clamp(3+2.7*Math.log10(1+b.r/4.26e-5),3,11));
 }
 function bodyRadius(b){
  const largest=Math.max(1,...state.bodies.map(bodyBase));
@@ -457,6 +474,21 @@ function drawTidalDebris(h,x,y,R){
   dot(...head,Math.max(.3,sz*Math.exp(-age*.7)),d.captured?'rgba(255,178,100,'+alpha+')':colorCSS(d.color)+'cc');
  }ctx.restore()
 }
+function drawImpacts(){
+ state.impacts=(state.impacts||[]).filter(e=>state.elapsed-e.t<6&&state.bodies.includes(e.target));
+ ctx.save();ctx.globalCompositeOperation='screen';ctx.lineCap='round';
+ for(const e of state.impacts){
+  const age=Math.max(0,state.elapsed-e.t),p=project(e.target.p),r=bodyRadius(e.target),v=project(e.target.p.map((x,k)=>x+e.u[k]*.04)),a=Math.atan2(v[1]-p[1],v[0]-p[0]),x=p[0]+Math.cos(a)*r*.88,y=p[1]+Math.sin(a)*r*.88;
+  const flash=Math.exp(-age*3.7),scale=(e.giant?.9:.46)*r*e.energy;
+  glow(x,y,Math.max(1,scale*(.45+age*.6)),[[0,'rgba(255,250,221,'+(.92*flash)+')'],[.23,'rgba(255,173,70,'+(.68*flash)+')'],[.64,'rgba(255,79,20,'+(.27*flash)+')'],[1,'rgba(255,80,0,0)']]);
+  if(age<1.8){const wave=Math.max(1,scale*(.18+age*.94));ctx.strokeStyle='rgba(255,203,117,'+(.58*Math.exp(-age*2))+')';ctx.lineWidth=Math.max(.6,r*.045*(1-age*.4));ctx.beginPath();ctx.ellipse(x,y,wave,wave*.42,a+Math.PI/2,-Math.PI*.92,Math.PI*.92);ctx.stroke()}
+  for(const q of e.particles){const f=age/(3.8*q.life);if(f>=1)continue;const ang=a+Math.sin(q.angle)*(e.giant?1.44:1.1),dist=scale*q.speed*(1-Math.exp(-age*.75)),px=x+Math.cos(ang)*dist,py=y+Math.sin(ang)*dist,alpha=(1-f)**1.65,sz=Math.max(.35,q.sz*(e.giant?1.35:.8)*Math.sqrt(state.zoom)*(1-.65*f));
+   if(e.giant)glow(px,py,Math.max(1,sz*3.2),[[0,'rgba(255,184,89,'+(.23*alpha)+')'],[1,'rgba(255,86,30,0)']]);else{ctx.strokeStyle='rgba(255,143,53,'+(.38*alpha)+')';ctx.lineWidth=sz*.55;ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(px-Math.cos(ang)*sz*3,py-Math.sin(ang)*sz*3);ctx.stroke()}
+   dot(px,py,sz,'rgba(255,'+Math.round(230-120*f)+','+Math.round(160-115*f)+','+(.76*alpha)+')');
+  }
+  if(e.giant&&e.stellar&&age>.18){ctx.strokeStyle='rgba(255,125,56,'+(.27*Math.exp(-age*.55))+')';ctx.lineWidth=Math.max(1,r*.045);ctx.beginPath();ctx.ellipse(p[0],p[1],r*(1.1+age*.12),r*.38*(1+age*.12),a-.25,a-1.5,a+2.2);ctx.stroke()}
+ }ctx.restore()
+}
 function solar(){
  const bs=state.bodies;
  // Apply lensing to the starfield only, before drawing planets, trails and labels.
@@ -474,6 +506,7 @@ function solar(){
   }
   if(i===state.sel){ctx.setLineDash([3,4]);ctx.strokeStyle='#dfb77fbb';ctx.beginPath();ctx.arc(x,y,r+5,0,TAU);ctx.stroke();ctx.setLineDash([])}
   }
+ drawImpacts();
  // Draw readable labels last, prioritizing the selected body.
  const placed=[];
  if(state.labels)for(const {b,i,p:[x,y],r} of [...screenBodies].sort((a,b)=>(b.i===state.sel)-(a.i===state.sel))){if(x<-r*3||y<-r*3||x>W+r*3||y>H+r*3)continue;const lx=x+r+7,ly=y+4;ctx.font=(W<500?'10':'12')+'px system-ui';const len=ctx.measureText(b.name).width;if(i===state.sel||!placed.some(t=>Math.abs(t.y-ly)<14&&lx<t.x+t.w&&lx+len>t.x)){ctx.fillStyle=i===state.sel?'#f3d9ac':'#bbc4cd';ctx.fillText(b.name,lx,ly);placed.push({x:lx,y:ly,w:len})}
@@ -500,7 +533,8 @@ function targetOptions(){return state.bodies.map((b,i)=>'<option value="'+i+'" '
 function refreshControls(){
  let html='';
  if(state.id==='lab'){
-  html='<div class="line-label"><span>恒星掠过距离</span><span class="small">'+(state.mode==='near'?'0.68':'1.62')+' Rₜ</span></div>'+segment([['near','近距离'],['far','远距离']],state.mode,'mode')+'<button class="primary" id="launch">'+icon('launch')+(state.flight?'重新投放恒星':'投放恒星')+'</button><p class="lab-note">Rₜ 是潮汐半径。远掠恒星会持续飞离，视野随距离平滑扩展；可随时暂停或重置。</p>'
+  const kind=state.labKind||'star',mass=state.labMass??1,q=state.labQ??.68;
+  html='<label>投放类型<select class="wide" id="labKind">'+[['star','恒星'],['rock','岩石行星'],['gas','气态巨行星']].map(([v,n])=>'<option value="'+v+'" '+(v===kind?'selected':'')+'>'+n+'</option>').join('')+'</select></label><label>质量（'+(kind==='star'?'太阳质量 M☉':'地球质量 M⊕')+'）<input class="wide" type="number" id="labMass" min="'+(kind==='star'?.08:.01)+'" max="'+(kind==='star'?100:5000)+'" step="any" value="'+mass+'"></label><label>最近掠过距离（R₀）<input class="wide" type="number" id="labQ" min=".25" max="8" step="any" value="'+q+'"></label><button class="primary" id="launch">'+icon('launch')+(state.flight?'重新投放':'投放天体')+'</button><p class="lab-note">R₀ 为太阳型恒星的参考潮汐半径（约 0.47 AU）。距离指最近掠过距离；实际潮汐半径随质量与类型变化。轨迹持续运行。</p>'
  }else if(state.id==='life'){
   html='<div class="line-label">初始质量 <span class="small">单位 · 太阳质量</span></div>'+segment([[1,'1 M☉'],[12,'12 M☉'],[35,'35 M☉']],state.mass,'mass')+'<div class="line-label">演化阶段</div><div class="steps">'+trackNames().map((n,i)=>'<button data-phase="'+i+'" aria-pressed="'+flag(state.phase===i)+'">'+n+'</button>').join('')+'</div><button id="nextPhase" class="primary">'+icon('next')+(state.phase===4?'从星云重新开始':'下一阶段')+'</button><p class="lab-note">'+lifeNote()+'</p>'
  }else{
@@ -518,8 +552,8 @@ function editModal(){
  const labels=['质量（M☉）','半径（AU）','x（AU）','y（AU）','z（AU）','vx（AU/年）','vy（AU/年）','vz（AU/年）'],vals=[b.m,b.r,...b.p,...b.v];
  modal('天体编辑','<label>目标天体 <select id="editTarget">'+targetOptions()+'</select></label><div class="line-label">质量倍率 <output id="factorOut">1.00×</output></div><input class="wide" id="factor" type="range" min="-2" max="2" step=".1" value="0"><div class="compact"><button class="quiet" id="applyFactor">应用倍率</button><button class="quiet" id="circular">自动圆轨道</button></div><details><summary>高级参数</summary><label>名称<input id="editName" maxlength="48" value="'+esc(b.name)+'"></label><div class="formgrid">'+fields.map((k,i)=>'<label>'+labels[i]+'<input type="number" id="val_'+k+'" value="'+Number(vals[i].toPrecision(10))+'" step="any"></label>').join('')+'</div><button id="applyBody" class="primary">应用参数</button></details><button id="removeBody" class="footlink">删除选中天体</button>')
 }
-function details(){modal('观测说明','<p>拖动观测画面转动视角，滚轮或双指缩放。点标签按钮可隐藏标注，准星按钮可返回初始视角。</p><p><b>黑洞实验室</b>　黑洞以实时屏幕空间引力透镜近似扭曲背景，吸积盘为连续程序绘制。束缚碎屑持续运行；进入捕获区的物质退出牛顿动力学计算，继承入射径向和切向速度，用同一连续坐标映射逐渐趋近黑洞阴影并红移；逃逸碎屑离开观测区。Rₜ 表示潮汐半径。</p><p><b>恒星一生</b>　三个质量对应三条示例路径。各阶段展示时间经过压缩。真实结局还受成分、失质量与伴星影响。</p><p><b>引力沙盒</b>　使用牛顿多体引力和碰撞合并，单位为 AU、年及太阳质量。显示尺寸经过放大，太阳系全景压缩了轨道距离。追踪模式统一放大各天体；球面贴图、云层和光照随视角连续插值，黑洞仅对远处星空背景施加近似透镜效果，行星、轨道与名称保持正常绘制，物质捕获由三维距离独立判断，并使用程序吸积盘；演示捕获半径与阴影大小联动，不是真实事件视界。潮汐区内按接近程度逐级剥离物质，演示碎屑作为独立示踪粒子继续运动，捕获质量只计入一次，光迹作为外部观测近似继续显示。不是广义相对论光线追踪，未模拟真实吸积盘粘滞和引力波质量损失。</p><p><b>图像与资料</b>　行星和太阳表面取自 <a target="_blank" rel="noopener" href="https://www.solarsystemscope.com/textures/">Solar System Scope</a>（<a target="_blank" rel="noopener" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>），已缩放、转码和重新着色。黑洞、星云与背景在本项目中绘制。科学参考见 NASA 的 <a target="_blank" rel="noopener" href="https://science.nasa.gov/universe/black-holes/anatomy/">黑洞结构</a> 和 <a target="_blank" rel="noopener" href="https://science.nasa.gov/learn/heat/resource/journey-through-the-heliosphere-life-cycles-of-the-stars/">恒星演化</a>。</p><p class="mono">Cosmic Garden · v0.3.8</p>')}
-function save(){try{localStorage.setItem('cosmicGarden_v3',JSON.stringify({version:3,...state}));toast('已保存当前实验')}catch{toast('此浏览器未能保存实验')}}
+function details(){modal('观测说明','<p>拖动观测画面转动视角，滚轮或双指缩放。点标签按钮可隐藏标注，准星按钮可返回初始视角。</p><p><b>黑洞实验室</b>　黑洞以实时屏幕空间引力透镜近似扭曲背景，吸积盘为连续程序绘制。束缚碎屑持续运行；进入捕获区的物质退出牛顿动力学计算，继承入射径向和切向速度，用同一连续坐标映射逐渐趋近黑洞阴影并红移；逃逸碎屑离开观测区。R₀ 表示太阳型恒星的参考潮汐半径；实际估算随类型与质量变化。</p><p><b>恒星一生</b>　三个质量对应三条示例路径。各阶段展示时间经过压缩。真实结局还受成分、失质量与伴星影响。</p><p><b>引力沙盒</b>　使用牛顿多体引力和碰撞合并，单位为 AU、年及太阳质量。显示尺寸经过放大，太阳系全景压缩了轨道距离。恒星吞噬采用放大的演示接触半径和连续碰撞检测；羽流和冲击波是视觉近似，质量与动量在合并时计入。追踪模式统一放大各天体；球面贴图、云层和光照随视角连续插值，黑洞仅对远处星空背景施加近似透镜效果，行星、轨道与名称保持正常绘制，物质捕获由三维距离独立判断，并使用程序吸积盘；演示捕获半径与阴影大小联动，不是真实事件视界。潮汐区内按接近程度逐级剥离物质，演示碎屑作为独立示踪粒子继续运动，捕获质量只计入一次，光迹作为外部观测近似继续显示。不是广义相对论光线追踪，未模拟真实吸积盘粘滞和引力波质量损失。</p><p><b>图像与资料</b>　行星和太阳表面取自 <a target="_blank" rel="noopener" href="https://www.solarsystemscope.com/textures/">Solar System Scope</a>（<a target="_blank" rel="noopener" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>），已缩放、转码和重新着色。黑洞、星云与背景在本项目中绘制。科学参考见 NASA 的 <a target="_blank" rel="noopener" href="https://science.nasa.gov/universe/black-holes/anatomy/">黑洞结构</a> 和 <a target="_blank" rel="noopener" href="https://science.nasa.gov/learn/heat/resource/journey-through-the-heliosphere-life-cycles-of-the-stars/">恒星演化</a>。</p><p class="mono">Cosmic Garden · v0.3.9</p>')}
+function save(){try{localStorage.setItem('cosmicGarden_v3',JSON.stringify({version:3,...state,impacts:[]}));toast('已保存当前实验')}catch{toast('此浏览器未能保存实验')}}
 const finite=Number.isFinite,vec=v=>Array.isArray(v)&&v.length===3&&v.every(finite),validBody=b=>b&&typeof b.name==='string'&&['star','planet','hole','moon'].includes(b.kind)&&finite(b.m)&&finite(b.r)&&b.m>0&&b.r>0&&vec(b.p)&&vec(b.v);
 function restore(){
  try{const fresh=localStorage.getItem('cosmicGarden_v3'),raw=fresh||localStorage.getItem('cosmicGarden');if(!raw){toast('这个浏览器中还没有存档');return}const s=JSON.parse(raw);
@@ -528,9 +562,9 @@ function restore(){
  const legacyScene=oldStars.includes('恒星 C')?'three':oldStars.includes('恒星 B')?'binary':s.bodies.some(b=>b.kind==='hole')?'hole':'solar';
  const id=s.version===3?s.id:legacyScene;if(!Object.hasOwn(sceneData,id))throw Error();
  const bodies=s.bodies.map(b=>{const body=makeBody(b.name,b.kind,b.m,b.r,b.p,b.v,finite(b.color)?b.color:0xb6cdef,typeof b.tex==='string'?b.tex:null);body.history=(Array.isArray(b.history)?b.history:[]).filter(vec).slice(-240);if(finite(b.guide))body.guide=b.guide;if([b.tidalM,b.tidalR,b.tidalLost].every(finite)&&b.tidalM>0&&b.tidalR>0){body.tidalM=b.tidalM;body.tidalR=b.tidalR;body.tidalLost=clamp(b.tidalLost,0,1)}if(Array.isArray(b.debris))body.debris=b.debris.filter(d=>d&&vec(d.p)&&vec(d.v)&&[d.mass,d.age,d.size,d.color].every(finite)&&d.mass>=0&&(!d.captured||(vec(d.entry)&&vec(d.entryV)&&finite(d.captureAge)))).slice(-160).map(d=>({...d,tail:(Array.isArray(d.tail)?d.tail:[]).filter(vec).slice(-12)}));if(Array.isArray(b.infall))body.infall=b.infall.filter(d=>d&&[d.t,d.phase,d.tilt].every(finite)).slice(-80);return body});
- const flight=s.flight;if(flight&&(![.68,1.62].includes(flight.q)||![flight.t,flight.peri].every(finite)||!Array.isArray(flight.parts)||flight.parts.length>180||!Array.isArray(flight.trail)||!flight.trail.every(v=>Array.isArray(v)&&v.length===2&&v.every(finite))||!flight.parts.every(p=>[p.x,p.y,p.vx,p.vy,p.w].every(finite)&&Array.isArray(p.tail)&&p.tail.every(v=>Array.isArray(v)&&v.length===2&&v.every(finite)))))throw Error();
+ const flight=s.flight;if(flight&&((!finite(flight.q)||flight.q<.25||flight.q>8)||![flight.t,flight.peri].every(finite)||!Array.isArray(flight.parts)||flight.parts.length>180||!Array.isArray(flight.trail)||!flight.trail.every(v=>Array.isArray(v)&&v.length===2&&v.every(finite))||!flight.parts.every(p=>[p.x,p.y,p.vx,p.vy,p.w].every(finite)&&Array.isArray(p.tail)&&p.tail.every(v=>Array.isArray(v)&&v.length===2&&v.every(finite)))))throw Error();
  startScene(id);Object.assign(state,{time:s.time,bodies,elapsed:finite(s.elapsed)?Math.max(0,s.elapsed):0,sel:clamp(s.sel|0,0,Math.max(0,bodies.length-1)),track:!!s.track,paused:!!s.paused,
- speed:[.1,.5,1,2,5,10,20].includes(s.speed)?s.speed:1,labels:s.labels!==false,trails:s.trails!==false,zoom:finite(s.zoom)?clamp(s.zoom,.35,6):1,yaw:finite(s.yaw)?s.yaw:0,pitch:finite(s.pitch)?clamp(s.pitch,-1.3,1.48):.43,mode:s.mode==='far'?'far':'near',mass:[1,12,35].includes(s.mass)?s.mass:1,phase:clamp(s.phase|0,0,4),phaseTime:finite(s.phaseTime)?clamp(s.phaseTime,0,12):0,flight:flight||null,log:Array.isArray(s.log)?s.log.filter(q=>q&&finite(q.t)&&typeof q.msg==='string').slice(0,5):[]});record(fresh?'已恢复保存的实验。':'已载入旧版引力存档。');syncUI();toast('读档成功')
+ speed:[.1,.5,1,2,5,10,20].includes(s.speed)?s.speed:1,labels:s.labels!==false,trails:s.trails!==false,zoom:finite(s.zoom)?clamp(s.zoom,.35,6):1,yaw:finite(s.yaw)?s.yaw:0,pitch:finite(s.pitch)?clamp(s.pitch,-1.3,1.48):.43,mode:s.mode==='far'?'far':'near',mass:[1,12,35].includes(s.mass)?s.mass:1,phase:clamp(s.phase|0,0,4),phaseTime:finite(s.phaseTime)?clamp(s.phaseTime,0,12):0,labKind:['star','rock','gas'].includes(s.labKind)?s.labKind:'star',labMass:finite(s.labMass)&&s.labMass>0?s.labMass:1,labQ:finite(s.labQ)?clamp(s.labQ,.25,8):flight?.q??.68,flight:flight||null,log:Array.isArray(s.log)?s.log.filter(q=>q&&finite(q.t)&&typeof q.msg==='string').slice(0,5):[]});record(fresh?'已恢复保存的实验。':'已载入旧版引力存档。');syncUI();toast('读档成功')
  }catch{toast('存档格式无效或当前浏览器无法读取')}
 }
 function togglePlay(){state.paused=!state.paused;playUI()}
@@ -551,14 +585,14 @@ function handleClick(e){
  case 'nextPhase':if(state.phase===4){state.paused=false;setPhase(0)}else setPhase(state.phase+1);break;
  case 'editor':editModal();break;case 'create':createModal();break;case 'follow':if(b){state.track=!state.track;state.zoom=1;refreshControls()}break;
  case 'newCustom':{const k=$('customKind').value;if(addBody({star:'新恒星',planet:'新行星',moon:'新卫星',hole:'新黑洞'}[k],k))closeDialog();break}
- case 'applyFactor':if(b){const v=b.m*10**+$('factor').value;if(!finite(v)||v<=0){toast('倍率超出可用范围');break}if(b.kind==='hole')b.r*=v/b.m;b.m=v;delete b.guide;editModal();record(b.name+'的质量已调整。')}break;
+ case 'applyFactor':if(b){const v=b.m*10**+$('factor').value;if(!finite(v)||v<=0){toast('倍率超出可用范围');break}if(b.kind==='hole')b.r*=v/b.m;else if(b.kind==='star')b.r*=(v/b.m)**.55;b.m=v;for(const q of state.bodies)delete q.guide;editModal();record(b.name+'的质量已调整。')}break;
  case 'circular':if(b&&circular(b,heaviest(b))){editModal();record(b.name+'已重新计算圆轨道。')}else toast('需要另一颗有间距的天体');break;
- case 'applyBody':{if(!b)break;const vals=fields.map(k=>$('val_'+k).valueAsNumber),name=$('editName').value.trim();if(!name||!vals.every(finite)||vals[0]<=0||vals[1]<=0){toast('请输入名称、有限数值和正的质量与半径');break}Object.assign(b,{name,m:vals[0],r:vals[1],p:vals.slice(2,5),v:vals.slice(5),history:[]});delete b.guide;closeDialog();record('已更新'+name+'的参数。');syncUI();break}
+ case 'applyBody':{if(!b)break;const vals=fields.map(k=>$('val_'+k).valueAsNumber),name=$('editName').value.trim();if(!name||!vals.every(finite)||vals[0]<=0||vals[1]<=0){toast('请输入名称、有限数值和正的质量与半径');break}Object.assign(b,{name,m:vals[0],r:vals[1],p:vals.slice(2,5),v:vals.slice(5),history:[]});for(const q of state.bodies)delete q.guide;closeDialog();record('已更新'+name+'的参数。');syncUI();break}
  case 'removeBody':if(b){state.bodies.splice(state.sel,1);state.sel=clamp(state.sel,0,Math.max(0,state.bodies.length-1));state.track=false;closeDialog();record('已移除'+b.name+'。');syncUI()}break;
  }
 }
 document.addEventListener('click',handleClick);$('dlg').addEventListener('click',e=>{if(e.target===$('dlg')){const r=$('dlg').getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)closeDialog()}});
-document.addEventListener('change',e=>{switch(e.target.id){case 'speed':state.speed=+e.target.value;break;case 'target':state.sel=+e.target.value;break;case 'editTarget':state.sel=+e.target.value;refreshControls();editModal();break;case 'trails':state.trails=e.target.checked;break}});
+document.addEventListener('change',e=>{switch(e.target.id){case 'labKind':state.labQ=$('labQ').valueAsNumber||.68;state.labKind=e.target.value;state.labMass=state.labKind==='gas'?318:1;refreshControls();break;case 'labMass':if(Number.isFinite(e.target.valueAsNumber))state.labMass=e.target.valueAsNumber;break;case 'labQ':if(Number.isFinite(e.target.valueAsNumber))state.labQ=e.target.valueAsNumber;break;case 'speed':state.speed=+e.target.value;break;case 'target':state.sel=+e.target.value;break;case 'editTarget':state.sel=+e.target.value;refreshControls();editModal();break;case 'trails':state.trails=e.target.checked;break}});
 document.addEventListener('input',e=>{if(e.target.id==='factor')$('factorOut').value=(10**+e.target.value).toFixed(2)+'×'});
 const pointers=new Map();let fingerStart=null,pinched=false;
 const distance=()=>{const p=[...pointers.values()];return p.length<2?0:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y)};
