@@ -174,18 +174,43 @@ function getNormals(n){
  for(let y=0;y<n;y++)for(let x=0;x<n;x++){const u=2*(x+.5)/n-1,v=2*(y+.5)/n-1,rr=u*u+v*v;if(rr>1)continue;const z=Math.sqrt(1-rr);data.push([4*(y*n+x),Math.atan2(u,z)/TAU,(Math.asin(v)/Math.PI+.5),u,v,z,Math.min(1,(1-rr)*n*.65)])}
  normals.set(n,data);return data
 }
+// Continuous equirectangular projection; cache latitude/longitude geometry per camera tilt.
+const projectedNormals=new Map();let projectedPitch=null;
+function viewNormals(n,pitch){
+ if(pitch!==projectedPitch){projectedNormals.clear();projectedPitch=pitch}
+ if(projectedNormals.has(n))return projectedNormals.get(n);
+ if(pitch===0)return getNormals(n);
+ const c=Math.cos(pitch),s=Math.sin(pitch);
+ const mapped=getNormals(n).map(([i,lon,lat,u,v,z,a])=>{
+  const vy=v*c-z*s,vz=z*c+v*s;
+  return [i,Math.atan2(u,vz)/TAU,Math.asin(clamp(vy,-1,1))/Math.PI+.5,u,v,z,a];
+ });
+ projectedNormals.set(n,mapped);return mapped;
+}
 function sphere(x,y,r,tex,spin=0,tone='natural',angle=-.8){
  if(r<.8)return;
- const n=r<12?32:r<30?64:r<60?104:r<105?176:256,frame=Math.floor(spin*40),lamp=Math.round(angle*12),key=[n,tex,tone,lamp].join('/');
+ const n=r<12?32:r<30?64:r<60?104:r<105?176:256;
+ const phase=((spin%1)+1)%1,cloudPhase=((spin*1.075%1)+1)%1;
+ const pitch=clamp(state.pitch-.43,-1.3,1.3),key=[n,tex,tone].join('/');
  const map=pixels[tex];if(!map){dot(x,y,r,tex==='sun'?'#ffd5a0':'#a7bdca');return}
- let s=spheres.get(key);if(!s){if(spheres.size>=96)spheres.delete(spheres.keys().next().value);const c=document.createElement('canvas');c.width=c.height=n;const g=c.getContext('2d');s={c,g,data:g.createImageData(n,n),frame:null};spheres.set(key,s)}
- if(s.frame!==frame){const data=s.data.data,src=map.rgba,star=tex==='sun',lx=Math.cos(lamp/12)*.77,ly=Math.sin(lamp/12)*.77;
-  for(const [i,lon,lat,u,v,z,a] of getNormals(n)){
-   const sx=(Math.floor((lon+frame/40+.55)*map.w)%map.w+map.w)%map.w,sy=Math.min(map.h-1,Math.floor(lat*map.h)),j=4*(sx+map.w*sy);
+ const cloud=tex==='earth'?pixels.clouds:null;
+ let s=spheres.get(key);if(!s){if(spheres.size>=96)spheres.delete(spheres.keys().next().value);const c=document.createElement('canvas');c.width=c.height=n;const g=c.getContext('2d');s={c,g,data:g.createImageData(n,n),phase:null};spheres.set(key,s)}
+ if(s.phase!==phase||s.pitch!==pitch||s.angle!==angle||s.map!==map||s.cloud!==cloud||(cloud&&s.cloudPhase!==cloudPhase)){
+  const data=s.data.data,src=map.rgba,w=map.w,h=map.h,star=tex==='sun',lx=Math.cos(angle)*.77,ly=Math.sin(angle)*.77;
+  for(const [i,lon,lat,u,v,z,a] of viewNormals(n,pitch)){
+   const sx=(lon+phase+.55)*w-.5,sy=clamp(lat*h-.5,0,h-1),ix=Math.floor(sx),iy=Math.floor(sy);
+   const x0=(ix%w+w)%w,x1=(x0+1)%w,y1=Math.min(h-1,iy+1),fx=sx-ix,fy=sy-iy;
+   const j00=4*(iy*w+x0),j10=4*(iy*w+x1),j01=4*(y1*w+x0),j11=4*(y1*w+x1);
+   const a00=(1-fx)*(1-fy),a10=fx*(1-fy),a01=(1-fx)*fy,a11=fx*fy;
    const light=star?.66+.36*z:.083+.98*Math.max(0,u*lx+v*ly+z*.63);
-   let red=src[j],green=src[j+1],blue=src[j+2];
-   if(tex==='earth'&&pixels.clouds){const cloud=pixels.clouds,cloudX=(Math.floor((lon+frame/40*1.075+.55)*cloud.w)%cloud.w+cloud.w)%cloud.w;
-    const alpha=Math.min(.9,Math.max(0,cloud.rgba[4*(Math.min(cloud.h-1,Math.floor(lat*cloud.h))*cloud.w+cloudX)]/255-.07));
+   let red=src[j00]*a00+src[j10]*a10+src[j01]*a01+src[j11]*a11,
+       green=src[j00+1]*a00+src[j10+1]*a10+src[j01+1]*a01+src[j11+1]*a11,
+       blue=src[j00+2]*a00+src[j10+2]*a10+src[j01+2]*a01+src[j11+2]*a11;
+   if(cloud){
+    const cw=cloud.w,ch=cloud.h,cx=(lon+cloudPhase+.55)*cw-.5,cy=clamp(lat*ch-.5,0,ch-1),cx0=Math.floor(cx),cy0=Math.floor(cy),cf=cx-cx0,df=cy-cy0;
+    const cl=(cx0%cw+cw)%cw,cr=(cl+1)%cw,cb=Math.min(ch-1,cy0+1),rgba=cloud.rgba;
+    const top=rgba[4*(cy0*cw+cl)]*(1-cf)+rgba[4*(cy0*cw+cr)]*cf,bottom=rgba[4*(cb*cw+cl)]*(1-cf)+rgba[4*(cb*cw+cr)]*cf;
+    const alpha=clamp((top*(1-df)+bottom*df)/255-.07,0,.9);
     red+=(246-red)*alpha;green+=(248-green)*alpha;blue+=(249-blue)*alpha;
    }
    if(star&&tone!=='natural'){const heat=.25*red+.6*green+.15*blue;
@@ -196,7 +221,7 @@ function sphere(x,y,r,tex,spin=0,tone='natural',angle=-.8){
    const rim=tex==='earth'?Math.pow(1-z,3)*Math.max(.1,light)*65:0;
    data[i]=red*light+rim*.3;data[i+1]=green*light+rim*.7;data[i+2]=blue*light+rim;data[i+3]=Math.round(255*a);
   }
-  s.g.putImageData(s.data,0,0);s.frame=frame;
+  s.g.putImageData(s.data,0,0);Object.assign(s,{phase,cloudPhase,pitch,angle,map,cloud});
  }
  ctx.drawImage(s.c,x-r,y-r,2*r,2*r);
 }
@@ -205,7 +230,7 @@ function star(x,y,r,tone='natural'){
  glow(x,y,r*2.25,[[0,'rgba('+c+',.52)'],[.4,'rgba('+c+',.27)'],[.62,'rgba('+c+',.08)'],[1,'rgba('+c+',0)']]);
  if(r>18){ctx.save();ctx.translate(x,y);ctx.lineWidth=Math.max(1,r*.009);const t=state.elapsed*.17;
   for(let k=0;k<58;k++){const a=k*2.39996+.008*t,size=.022+.035*(.5+.5*Math.sin(k*3.78+t));ctx.save();ctx.rotate(a);ctx.strokeStyle='rgba('+c+','+(.11+.09*Math.sin(k+t))+')';ctx.beginPath();ctx.ellipse(r*.988,0,r*size*1.6,r*size*3,.24,0,TAU);ctx.stroke();ctx.restore()}ctx.restore()}
- sphere(x,y,r,'sun',state.elapsed*.014+state.yaw*.10,tone);
+ sphere(x,y,r,'sun',state.elapsed*.014+state.yaw/TAU,tone);
 }
 function leader(text,px,py,lx,ly,side=1){
  if(!state.labels||px<0||px>W||py<0||py>H||lx<5||lx>W-5||ly<24||ly>H-44)return;
@@ -219,11 +244,21 @@ function sky(){
 function labGeometry(){const size=Math.min(W*1.10,H*1.73)*state.zoom;return {x:W*.50,y:H*(W<520?.55:.54),size,roll:-.14+state.yaw*.35}}
 function rotPoint(p,q,x,y,a){return [x+p*Math.cos(a)-q*Math.sin(a),y+p*Math.sin(a)+q*Math.cos(a)]}
 function flightProject(px,py,g){const scale=g.size*.126;return rotPoint(scale*(px*.82+py*.58),scale*(px*.18-py*.52),g.x,g.y,g.roll)}
+// Blend existing ray-traced black-hole views in premultiplied alpha, including transparent edges.
+const holeViews=new Map();
+function holeInclination(){return clamp(83+(state.pitch-.43)*16,72,88)}
+function holeArt(x,y,w,roll,inc=holeInclination()){
+ const lo=inc<83?72:83,hi=inc<83?83:88,t=clamp((inc-lo)/(hi-lo),0,1),a=pictures['bh'+lo],b=pictures['bh'+hi];
+ if(!ready(a)||!ready(b)){art('bh'+(ready(a)?lo:ready(b)?hi:83),x,y,w,w*760/1440,roll);return}
+ if(t===0||t===1){art('bh'+(t===0?lo:hi),x,y,w,w*760/1440,roll);return}
+ const size=w*ratio>720?1440:w*ratio>360?720:360;
+ let view=holeViews.get(size);if(!view){const c=document.createElement('canvas');c.width=size;c.height=Math.round(size*760/1440);view={c,g:c.getContext('2d'),inc:null};holeViews.set(size,view)}
+ if(view.inc!==inc){const {c,g}=view;g.clearRect(0,0,c.width,c.height);g.globalCompositeOperation='source-over';g.globalAlpha=1-t;g.drawImage(a,0,0,c.width,c.height);g.globalCompositeOperation='lighter';g.globalAlpha=t;g.drawImage(b,0,0,c.width,c.height);g.globalCompositeOperation='source-over';g.globalAlpha=1;view.inc=inc}
+ ctx.save();ctx.translate(x,y);ctx.rotate(roll);ctx.drawImage(view.c,-w/2,-w*760/2880,w,w*760/1440);ctx.restore();
+}
 function lab(){
- const g=labGeometry(),inc=clamp(83+(state.pitch-.43)*16,72,88);const src=inc<83?72:83,dest=inc<83?83:88;
- const blend=clamp((inc-src)/(dest-src),0,1);
- art('bh'+src,g.x,g.y,g.size,g.size*760/1440,g.roll);
- if(blend>.002)art('bh'+dest,g.x,g.y,g.size,g.size*760/1440,g.roll,blend);
+ const g=labGeometry(),inc=holeInclination();
+ holeArt(g.x,g.y,g.size,g.roll,inc);
  // Short, orbiting filaments follow the projected near side of the disk.
  ctx.save();ctx.translate(g.x,g.y);ctx.rotate(g.roll);ctx.scale(g.size/60,g.size/60);ctx.globalCompositeOperation='screen';
  for(let i=0;i<53;i++){const r=7.1+(i*1.8437)%16,omega=.33*(8/r)**1.5,a=(i*2.4+state.elapsed*omega)%TAU;
@@ -273,12 +308,12 @@ function solar(){
  const bs=state.bodies;if(state.trails)for(const b of bs){if(b.guide&&!state.track){const center=bs.find(v=>v.guide===undefined&&(v.kind==='star'||v.kind==='hole'));if(center){const points=[];for(let j=0;j<=120;j++){const a=j*TAU/120;points.push([center.p[0]+b.guide*Math.cos(a),center.p[1],center.p[2]+b.guide*Math.sin(a)])}line3(points,'#8491a330')}}line3(b.history,colorCSS(b.color)+'91')}
  screenBodies=bs.map((b,i)=>({b,i,p:project(b.p),r:bodyRadius(b)})).sort((a,b)=>a.p[2]-b.p[2]);
  const placed=[];for(const {b,i,p:[x,y],r} of screenBodies){if(x<-r*3||y<-r*3||x>W+r*3||y>H+r*3)continue;
-  if(b.kind==='hole'){art('bh83',x,y,r*7,r*7*760/1440,-.15);if(b.accretionUntil>state.elapsed){ctx.save();ctx.translate(x,y);ctx.rotate(-.15);ctx.globalCompositeOperation='lighter';for(let k=0;k<18;k++){const a=k*2.39996+state.elapsed*2,rr=r*(1.5+(k%5)*.24);dot(rr*Math.cos(a),rr*.18*Math.sin(a),Math.max(.6,r*.035),'rgba(255,175,90,.55)')}ctx.restore()}}
+  if(b.kind==='hole'){holeArt(x,y,r*7,-.15+state.yaw*.35);if(b.accretionUntil>state.elapsed){ctx.save();ctx.translate(x,y);ctx.rotate(-.15+state.yaw*.35);ctx.globalCompositeOperation='lighter';for(let k=0;k<18;k++){const a=k*2.39996+state.elapsed*2,rr=r*(1.5+(k%5)*.24);dot(rr*Math.cos(a),rr*Math.cos(holeInclination()*Math.PI/180)*Math.sin(a),Math.max(.6,r*.035),'rgba(255,175,90,.55)')}ctx.restore()}}
   else if(b.kind==='star')star(x,y,r,b.color===0xa5caff?'blue':b.color===0xff9da4?'red':'natural');
   else{const h=heaviest(b),hp=h?project(h.p):[x-100,y-60],lamp=Math.atan2(hp[1]-y,hp[0]-x);
-   if(b.tex==='saturn'){ctx.save();ctx.translate(x,y);ctx.rotate(-.28);for(let j=0;j<8;j++){ctx.beginPath();ctx.ellipse(0,0,r*(1.26+j*.095),r*(.28+j*.024),0,Math.PI,TAU);ctx.strokeStyle=j===4?'#373532':'#bea987';ctx.lineWidth=Math.max(.65,r*.075);ctx.stroke()}ctx.restore()}
-   sphere(x,y,r,b.tex,state.elapsed*.013+state.yaw*.16,'natural',lamp);
-   if(b.tex==='saturn'){ctx.save();ctx.translate(x,y);ctx.rotate(-.28);for(let j=0;j<8;j++){ctx.beginPath();ctx.ellipse(0,0,r*(1.26+j*.095),r*(.28+j*.024),0,0,Math.PI);ctx.strokeStyle=j===4?'#4a453a':'#d7c49a';ctx.lineWidth=Math.max(.65,r*.075);ctx.stroke()}ctx.restore()}
+   if(b.tex==='saturn'){ctx.save();ctx.translate(x,y);ctx.rotate(-.28);for(let j=0;j<8;j++){ctx.beginPath();ctx.ellipse(0,0,r*(1.26+j*.095),r*(1.26+j*.095)*Math.max(.035,Math.abs(Math.sin(state.pitch))*.54),0,Math.PI,TAU);ctx.strokeStyle=j===4?'#373532':'#bea987';ctx.lineWidth=Math.max(.65,r*.075);ctx.stroke()}ctx.restore()}
+   sphere(x,y,r,b.tex,state.elapsed*.013+state.yaw/TAU,'natural',lamp);
+   if(b.tex==='saturn'){ctx.save();ctx.translate(x,y);ctx.rotate(-.28);for(let j=0;j<8;j++){ctx.beginPath();ctx.ellipse(0,0,r*(1.26+j*.095),r*(1.26+j*.095)*Math.max(.035,Math.abs(Math.sin(state.pitch))*.54),0,0,Math.PI);ctx.strokeStyle=j===4?'#4a453a':'#d7c49a';ctx.lineWidth=Math.max(.65,r*.075);ctx.stroke()}ctx.restore()}
   }
   if(i===state.sel){ctx.setLineDash([3,4]);ctx.strokeStyle='#dfb77fbb';ctx.beginPath();ctx.arc(x,y,r+5,0,TAU);ctx.stroke();ctx.setLineDash([])}
   if(state.labels){const lx=x+r+7,ly=y+4;ctx.font=(W<500?'10':'12')+'px system-ui';const len=ctx.measureText(b.name).width;if(i===state.sel||!placed.some(t=>Math.abs(t.y-ly)<14&&lx<t.x+t.w&&lx+len>t.x)){ctx.fillStyle=i===state.sel?'#f3d9ac':'#bbc4cd';ctx.fillText(b.name,lx,ly);placed.push({x:lx,y:ly,w:len})}}
@@ -322,7 +357,7 @@ function editModal(){
  const labels=['质量（M☉）','半径（AU）','x（AU）','y（AU）','z（AU）','vx（AU/年）','vy（AU/年）','vz（AU/年）'],vals=[b.m,b.r,...b.p,...b.v];
  modal('天体编辑','<label>目标天体 <select id="editTarget">'+targetOptions()+'</select></label><div class="line-label">质量倍率 <output id="factorOut">1.00×</output></div><input class="wide" id="factor" type="range" min="-2" max="2" step=".1" value="0"><div class="compact"><button class="quiet" id="applyFactor">应用倍率</button><button class="quiet" id="circular">自动圆轨道</button></div><details><summary>高级参数</summary><label>名称<input id="editName" maxlength="48" value="'+esc(b.name)+'"></label><div class="formgrid">'+fields.map((k,i)=>'<label>'+labels[i]+'<input type="number" id="val_'+k+'" value="'+Number(vals[i].toPrecision(10))+'" step="any"></label>').join('')+'</div><button id="applyBody" class="primary">应用参数</button></details><button id="removeBody" class="footlink">删除选中天体</button>')
 }
-function details(){modal('观测说明','<p>拖动观测画面转动视角，滚轮或双指缩放。点标签按钮可隐藏标注，准星按钮可返回初始视角。</p><p><b>黑洞实验室</b>　不同倾角的盘面图像依据非旋转黑洞的光线弯曲预计算。气体亮度、恒星掠过和碎屑运动经过简化。束缚碎屑持续运行，进入内区的碎屑以盘面粒子呈现，逃逸碎屑离开观测区。Rₜ 表示潮汐半径。</p><p><b>恒星一生</b>　三个质量对应三条示例路径。各阶段展示时间经过压缩。真实结局还受成分、失质量与伴星影响。</p><p><b>引力沙盒</b>　使用牛顿多体引力和碰撞合并，单位为 AU、年及太阳质量。显示尺寸经过放大，太阳系全景压缩了轨道距离。追踪模式统一放大各天体；黑洞采用放大的演示吸积/合并半径，不是实际事件视界；吸积质量立即计入黑洞，未模拟真实吸积盘粘滞和引力波质量损失。</p><p><b>图像与资料</b>　行星和太阳表面取自 <a target="_blank" rel="noopener" href="https://www.solarsystemscope.com/textures/">Solar System Scope</a>（<a target="_blank" rel="noopener" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>），已缩放、转码和重新着色。黑洞、星云与背景在本项目中绘制。科学参考见 NASA 的 <a target="_blank" rel="noopener" href="https://science.nasa.gov/universe/black-holes/anatomy/">黑洞结构</a> 和 <a target="_blank" rel="noopener" href="https://science.nasa.gov/learn/heat/resource/journey-through-the-heliosphere-life-cycles-of-the-stars/">恒星演化</a>。</p><p class="mono">Cosmic Garden · v0.3.1</p>')}
+function details(){modal('观测说明','<p>拖动观测画面转动视角，滚轮或双指缩放。点标签按钮可隐藏标注，准星按钮可返回初始视角。</p><p><b>黑洞实验室</b>　不同倾角的盘面图像依据非旋转黑洞的光线弯曲预计算。气体亮度、恒星掠过和碎屑运动经过简化。束缚碎屑持续运行，进入内区的碎屑以盘面粒子呈现，逃逸碎屑离开观测区。Rₜ 表示潮汐半径。</p><p><b>恒星一生</b>　三个质量对应三条示例路径。各阶段展示时间经过压缩。真实结局还受成分、失质量与伴星影响。</p><p><b>引力沙盒</b>　使用牛顿多体引力和碰撞合并，单位为 AU、年及太阳质量。显示尺寸经过放大，太阳系全景压缩了轨道距离。追踪模式统一放大各天体；球面贴图、云层和光照随视角连续插值，黑洞倾角在三张预计算图之间平滑混合；黑洞采用放大的演示吸积/合并半径，不是实际事件视界；吸积质量立即计入黑洞，未模拟真实吸积盘粘滞和引力波质量损失。</p><p><b>图像与资料</b>　行星和太阳表面取自 <a target="_blank" rel="noopener" href="https://www.solarsystemscope.com/textures/">Solar System Scope</a>（<a target="_blank" rel="noopener" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>），已缩放、转码和重新着色。黑洞、星云与背景在本项目中绘制。科学参考见 NASA 的 <a target="_blank" rel="noopener" href="https://science.nasa.gov/universe/black-holes/anatomy/">黑洞结构</a> 和 <a target="_blank" rel="noopener" href="https://science.nasa.gov/learn/heat/resource/journey-through-the-heliosphere-life-cycles-of-the-stars/">恒星演化</a>。</p><p class="mono">Cosmic Garden · v0.3.2</p>')}
 function save(){try{localStorage.setItem('cosmicGarden_v3',JSON.stringify({version:3,...state}));toast('已保存当前实验')}catch{toast('此浏览器未能保存实验')}}
 const finite=Number.isFinite,vec=v=>Array.isArray(v)&&v.length===3&&v.every(finite),validBody=b=>b&&typeof b.name==='string'&&['star','planet','hole','moon'].includes(b.kind)&&finite(b.m)&&finite(b.r)&&b.m>0&&b.r>0&&vec(b.p)&&vec(b.v);
 function restore(){
