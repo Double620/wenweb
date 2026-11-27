@@ -513,6 +513,8 @@ function fluidRibbon(head,center,R,width,stretch,opacity,turn,tex,tone,visual){
  }
  const end=pts[pts.length-1].s,total=end+back;
  const filament=Math.min(Math.max(1.15,R*.105),Math.max(1.15,coreW*.26,R*.050));
+ // Narrow the orbital filament as it completes the turn, blending from the entry tangent.
+ const arcSlimming=.42*smooth01((wrap/TAU-.45)/.55);
  const peel=smooth01(visual.release),front=-back+peel*(total+back);
  const surface=tidalSwatch(tex,tone),cols=surface.width-1;
  for(let i=0;i<pts.length;i++){
@@ -524,7 +526,8 @@ function fluidRibbon(head,center,R,width,stretch,opacity,turn,tex,tone,visual){
   const orbit=clamp((p.s-entry)/Math.max(.01,end-entry),0,1);
   const terminal=smooth01((end-p.s)/Math.max(.1,Math.min(total*.34,Math.max(2*filament,R*.50))));
   const body=p.s<0?ball:(1-z)*ball+z*neck;
-  const line=z*filament*(1-neck)*(.99-.32*orbit)*Math.sqrt(terminal);
+  const arcScale=1-arcSlimming*smooth01((p.s-entry)/Math.max(1,R*.60));
+  const line=z*filament*(1-neck)*(.99-.32*orbit)*Math.sqrt(terminal)*arcScale;
   p.w=(coreW*body+line)*(peel?smooth01((p.s-front)/Math.max(2,back*1.2)):1);
   p.u=q<0?.24*(1+q):.24+.36*(1-Math.exp(-q*.85))+.40*clamp(p.s/Math.max(end,.001),0,1);
  }
