@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#080915"><title>Stardust · 星尘操控实验室｜第三次作业</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'%3E%3Crect width='40' height='40' rx='10' fill='%230d0d20'/%3E%3Cpath d='M20 4Q21 18 35 20Q21 22 20 36Q18 22 5 20Q18 18 20 4' fill='%23ceb6ff'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <svg xmlns="http://www.w3.org/2000/svg" class="symbols" aria-hidden="true"><defs>
+    <symbol id="cameraIcon" viewBox="0 0 24 24"><rect x="3" y="6" width="12" height="12" rx="3"/><path d="m15 10 5-3v10l-5-3"/></symbol>
+    <symbol id="guideIcon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.3a2.7 2.7 0 0 1 5.2.7c0 2-2.8 2.1-2.8 4M11.8 17h.1"/></symbol>
+    <symbol id="adjustIcon" viewBox="0 0 24 24"><path d="M3 7h6m4 0h8M3 17h11m4 0h3"/><circle cx="11" cy="7" r="2"/><circle cx="16" cy="17" r="2"/></symbol>
+    <symbol id="fullIcon" viewBox="0 0 24 24"><path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5"/></symbol>
+    <symbol id="backIcon" viewBox="0 0 24 24"><path d="m13 6-6 6 6 6m-5-6h12"/></symbol>
+    <symbol id="closeIcon" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="orbitIcon" viewBox="0 0 40 40"><ellipse cx="20" cy="20" rx="17" ry="8" transform="rotate(-36 20 20)"/><path d="M20 6q1.2 12.2 10 14-8.8 1.5-10 14-1.2-12.5-10-14Q18.8 18.2 20 6Z" fill="currentColor" stroke="none"/><circle cx="33" cy="10.5" r="1.7" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="mouseIcon" viewBox="0 0 24 24"><path d="M5 3.7 18 12l-6.2 1.1-3.2 5.8z"/></symbol>
+    <symbol id="layersIcon" viewBox="0 0 24 24"><path d="m3 8 9-5 9 5-9 5-9-5Zm0 5 9 5 9-5m-18 5 9 5 9-5"/></symbol>
+    <symbol id="starsIcon" viewBox="0 0 24 24"><path d="m10.5 4 1.7 5.8L18 11.5l-5.8 1.7-1.7 5.8-1.7-5.8L3 11.5l5.8-1.7L10.5 4Zm8.5-2 .8 2.2L22 5l-2.2.8L19 8l-.8-2.2L16 5l2.2-.8L19 2Z"/></symbol>
+  </defs></svg>
+  <main id="lab">
+    <div class="sky" aria-hidden="true"></div>
+    <canvas id="field" aria-label="可用鼠标、触屏或摄像头手势操控的实时星尘"></canvas>
+    <canvas id="ink" aria-hidden="true"></canvas>
+    <div class="vignette" aria-hidden="true"></div>
+    <header>
+      <div class="brand"><svg class="mark" aria-hidden="true"><use href="#orbitIcon"/></svg><div><h1 lang="en">Stardust</h1><span>星尘操控实验室</span></div></div>
+      <nav aria-label="实验控制">
+        <button class="camera" id="camera" aria-pressed="false"><svg><use href="#cameraIcon"/></svg><span>开启摄像头</span></button>
+        <span class="divider"></span>
+        <button class="tool" id="settings" aria-label="显示设置" title="显示设置"><svg><use href="#adjustIcon"/></svg></button>
+        <button class="tool" id="guide" aria-label="操作指南" title="操作指南"><svg><use href="#guideIcon"/></svg></button>
+        <button class="tool" id="full" aria-label="进入全屏" title="进入全屏"><svg><use href="#fullIcon"/></svg></button>
+      </nav>
+    </header>
+    <a class="back" href="../Double-Study-Journal.html#posts"><svg><use href="#backIcon"/></svg> 学习手记 <span>/</span> 第三次作业</a>
+    <section class="caption" aria-live="polite">
+      <div class="scene-en"><i></i><span id="scene-en" lang="en">Spiral galaxy</span></div>
+      <h2 id="scene-name">螺旋银河</h2>
+      <p id="hint">划过星尘留下星轨，长按让星尘聚拢。</p>
+    </section>
+    <section class="dock" aria-label="星尘场景">
+      <div class="dockhead"><span><svg><use href="#layersIcon"/></svg>场景切换</span><span id="position">02 <i>/</i> 05</span></div>
+      <div id="scenes" class="scenes"></div>
+    </section>
+    <footer>
+      <span class="mode"><i></i><span id="mode">指针模式</span><span id="gesture"></span></span>
+      <span class="stats"><svg><use href="#starsIcon"/></svg><span id="count">18,000</span> 粒子 <i></i><span id="fps">—</span> FPS</span>
+    </footer>
+    <div class="preview" id="preview" hidden><video id="video" autoplay muted playsinline></video><button id="hidePreview" class="tool" aria-label="收起摄像头预览"><svg><use href="#closeIcon"/></svg></button></div>
+    <p id="notice" class="notice" role="status" hidden></p>
+    <noscript>请开启 JavaScript 以运行星尘实验。</noscript>
+  </main>
+  <dialog id="panel" aria-labelledby="panel-title">
+    <div class="panelhead"><h2 id="panel-title">操作指南</h2><button id="dismiss" class="tool" aria-label="关闭"><svg><use href="#closeIcon"/></svg></button></div>
+    <section id="help-body">
+      <h3>摄像头手势</h3>
+      <dl><dt>张开手掌</dt><dd>从掌心向外推开星尘。</dd><dt>慢慢握拳</dt><dd>将附近的星尘卷成发光的核心。</dd><dt>只伸食指</dt><dd>移动指尖，在空中写下星轨。</dd><dt>拉开或合拢双手</dt><dd>连续调整整片星场的大小。</dd><dt>快速挥手</dt><dd>让星尘顺着挥动方向掠过。</dd></dl>
+      <h3>鼠标与触屏</h3><p>划动绘制星轨，点按推开星尘，长按聚拢，快速划动掀起风暴。滚轮或双指捏合缩放。</p>
+      <p class="fine">摄像头画面仅在本机识别。首次开启需要下载手部识别模型。</p>
+    </section>
+    <section id="settings-body" hidden>
+      <label class="setting">粒子数量<select id="quality"><option value="auto">自动适配</option><option value="18000">18,000</option><option value="12000">12,000</option><option value="9000">9,000</option><option value="6000">6,000</option></select></label>
+      <label class="setting">星尘辉光<input type="checkbox" id="glow" checked></label>
+      <label class="setting">摄像头预览<input type="checkbox" id="showPreview"></label>
+      <button class="reset" id="reset">恢复初始视野</button>
+      <p class="fine">交互参考 <a href="https://github.com/Wlarskog/gesture-particles" target="_blank" rel="noopener">Gesture Particles</a> · <a href="./LICENSE-gesture-particles.txt" target="_blank" rel="noopener">MIT</a>。手部识别使用 <a href="https://github.com/google-ai-edge/mediapipe" target="_blank" rel="noopener">MediaPipe</a> · <a href="./vendor/LICENSE" target="_blank" rel="noopener">Apache 2.0</a>。</p>
+    </section>
+  </dialog>
+  <script type="module" src="./app.js"></script>
+</body></html>
