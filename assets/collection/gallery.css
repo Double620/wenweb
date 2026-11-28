@@ -1,0 +1,131 @@
+/* Collection styles are scoped to the homepage and its image viewer. */
+#home-photos {
+  padding: 0 4.5% clamp(2.5rem, 6vw, 5rem);
+  --photo-gap: clamp(8px, 1vw, 15px);
+}
+#home-photos .painting {
+  display: block;
+  width: 92%;
+  max-width: 80rem;
+  height: auto;
+  aspect-ratio: 4 / 1;
+  margin: 0 auto clamp(24px, 3.2vw, 48px);
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  user-select: none;
+}
+#home-photos .portrait-strip {
+  display: flex;
+  gap: var(--photo-gap);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: none;
+  scrollbar-width: thin;
+  scrollbar-color: #b9a989 transparent;
+  padding-bottom: 8px;
+  --portrait-height: 20rem;
+}
+#home-photos .photo {
+  display: block;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  min-width: 0;
+  cursor: zoom-in;
+  line-height: 0;
+}
+#home-photos .photo:focus-visible { outline-offset: -4px; }
+#home-photos .portrait-strip .photo {
+  flex: 0 0 auto;
+  height: var(--portrait-height);
+  width: calc(var(--portrait-height) * var(--ratio));
+}
+#home-photos .photo img { display: block; width: 100%; height: auto; }
+#home-photos .wallpapers {
+  container-type: inline-size;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--photo-gap);
+  align-items: flex-start;
+  margin-top: clamp(18px, 2.6vw, 38px);
+}
+#home-photos .wallpapers .photo {
+  flex: var(--ratio) 1 40%;
+  flex-basis: calc(var(--ratio) * 25cqi);
+}
+#home-photos .portrait-strip:empty, #home-photos .wallpapers:empty { display: none; }
+
+#photo-viewer {
+  box-sizing: border-box;
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  color: #fff;
+  background: transparent;
+  --control: 44px;
+}
+#photo-viewer::backdrop { background: rgb(7 12 20 / 96%); }
+html:has(#photo-viewer[open]) { overflow: hidden; }
+#photo-viewer .photo-stage {
+  position: absolute;
+  inset: max(16px, env(safe-area-inset-top)) 68px max(16px, env(safe-area-inset-bottom));
+  display: flex;
+  container-type: size;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+#photo-viewer .image-size {
+  display: block;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  margin: auto;
+  width: min(100cqw, calc(100cqh * var(--ratio)), var(--natural-width));
+}
+#photo-viewer .image-size[aria-pressed=true] {
+  width: max(var(--natural-width), min(150cqw, calc(150cqh * var(--ratio))));
+  cursor: zoom-out;
+}
+#photo-viewer .image-size img { display: block; width: 100%; height: auto; }
+#photo-viewer .viewer-control {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: var(--control);
+  height: var(--control);
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid #ffffff48;
+  background: #10141abf;
+  color: #fff;
+}
+#photo-viewer .viewer-control svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; }
+#photo-viewer .viewer-control:disabled { opacity: .3; cursor: default; }
+#photo-viewer .dismiss { top: max(12px, env(safe-area-inset-top)); right: max(12px, env(safe-area-inset-right)); }
+#photo-viewer .previous, #photo-viewer .next { top: 50%; transform: translateY(-50%); }
+#photo-viewer .previous { left: max(12px, env(safe-area-inset-left)); }
+#photo-viewer .next { right: max(12px, env(safe-area-inset-right)); }
+@media (max-width: 680px) {
+  #home-photos { padding: 8px 17px 2rem; }
+  #home-photos .portrait-strip { --portrait-height: 15rem; }
+  #photo-viewer .photo-stage { inset: max(60px, env(safe-area-inset-top)) 8px calc(66px + env(safe-area-inset-bottom)); }
+  #photo-viewer .previous, #photo-viewer .next { top: auto; transform: none; bottom: max(12px, env(safe-area-inset-bottom)); }
+  #photo-viewer .previous { left: calc(50% - 54px); }
+  #photo-viewer .next { right: calc(50% - 54px); }
+}
+@media (max-width: 520px) {
+  #home-photos .wallpapers .photo { flex-basis: 100%; }
+}
+
+#home-photos:has(.portrait-strip:empty):has(.wallpapers:empty) .painting { margin-bottom: 0; }
