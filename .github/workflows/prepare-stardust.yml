@@ -1,0 +1,39 @@
+name: Prepare and check Stardust
+on:
+  push:
+    branches: [build/stardust-assignment-3]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare pinned MediaPipe runtime and verify model
+        run: |
+          set -euo pipefail
+          vendor=stardust/vendor
+          mkdir -p "$vendor/wasm"
+          archive=$(npm pack @mediapipe/tasks-vision@0.10.14 --pack-destination "$RUNNER_TEMP" --silent)
+          tar xf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP"
+          cp "$RUNNER_TEMP/package/vision_bundle.mjs" "$vendor/"
+          cp "$RUNNER_TEMP/package/wasm/"*.js "$RUNNER_TEMP/package/wasm/"*.wasm "$vendor/wasm/"
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/google-ai-edge/mediapipe/master/LICENSE -o "$vendor/LICENSE"
+          curl -fsSL --retry 3 https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task -o "$vendor/hand_landmarker.task"
+          echo "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1  $vendor/hand_landmarker.task" | sha256sum --check
+          git add "$vendor"
+          if ! git diff --cached --quiet; then
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git commit -m "Bundle the pinned browser runtime and hand landmark model"
+            git push origin HEAD:build/stardust-assignment-3
+          fi
+      - name: Test real model, pointer, mobile layout and WebGL simulation
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 2 https://storage.googleapis.com/mediapipe-tasks/gesture_recognizer/pointing_up.jpg -o stardust/test-hand.jpg
+          npm install --prefix "$RUNNER_TEMP/stardust-qa" --no-audit --no-fund puppeteer-core@24.10.2
+          cp .github/stardust-qa.cjs "$RUNNER_TEMP/stardust-qa/run.cjs"
+          python3 -m http.server 8100 --bind 127.0.0.1 >/tmp/stardust-http.log 2>&1 &
+          node "$RUNNER_TEMP/stardust-qa/run.cjs"
