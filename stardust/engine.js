@@ -271,8 +271,8 @@ export function createEngine(canvas){
       previous.set(weights); selected=id;end=cloud.targets[id];progress=0;
       renderer.change(start,end);
     },
-    draw(dt,input,count,glow){
-      clock+=dt;progress=clamp(progress+dt/1.85);
+    draw(dt,input,count,glow,elapsed=dt){
+      clock+=elapsed;progress=clamp(progress+elapsed/1.85);
       const ratio=smooth();
       for(let i=0;i<5;i++)weights[i]=previous[i]*(1-ratio)+(i===selected?ratio:0);
       renderer.frame({...view,...input,clock,dt,morph:ratio,count,glow:glow?1:0,quality:Math.min(2,18000/count),scene:weights});

@@ -14,6 +14,7 @@ const assert=require('node:assert/strict');
         return result;
       };
       Object.defineProperty(navigator.mediaDevices,'getUserMedia',{value:async()=>{
+        if(window.denyTest)throw new DOMException('Denied','NotAllowedError');
         const im=new Image();im.src='./test-hand.jpg';await im.decode();
         const c=document.createElement('canvas');c.width=im.naturalWidth;c.height=im.naturalHeight;
         const ctx=c.getContext('2d');const frame=()=>ctx.drawImage(im,0,0);
@@ -38,6 +39,14 @@ const assert=require('node:assert/strict');
     await p.setViewport({width:360,height:740,isMobile:true,hasTouch:true});
     await p.click('[data-scene="halo"]');await p.click('#settings');
     assert.equal(await p.$eval('#panel',d=>d.open),true);await p.click('#dismiss');
+    const client=await p.createCDPSession();
+    await client.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:93,y:270,id:1},{x:232,y:290,id:2}]});
+    await client.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:55,y:260,id:1},{x:270,y:300,id:2}]});
+    await p.waitForFunction(()=>document.querySelector('#gesture').textContent==='双指缩放');
+    await client.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    await p.evaluate(()=>window.denyTest=true);await p.click('#camera');
+    await p.waitForFunction(()=>document.querySelector('#notice').textContent.includes('未获得摄像头权限'));
+    await p.click('[data-scene="dust"]');assert.equal(await p.$eval('#scene-name',n=>n.textContent),'自由星尘');
     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.deepEqual(errors,[]);console.log('PASS: GPU / five scenes / pointer / real hand model from a fixture video stream / camera release / mobile layout');
   }finally{await browser.close();}

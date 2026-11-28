@@ -7,13 +7,14 @@ export function createInput(engine, ink, onGesture){
   const f={hand:[0,0,0,0],wind:[0,0],trail:[0,0],zoom:1};
   let goal={...f,hand:[0,0,0,0],wind:[0,0],trail:[0,0]}, zoom=1;
   let lastPoint=null, lastStorm=-Infinity, lastInk=0, strokes=[], contacts=new Map(),pinch=null;
-  let mode='',lastHand=0, previousPalm=null, handSpan=null,first=null,holdTimer=0,hold=false;
+  let mode='',lastHand=0, previousPalm=null, handSpan=null,first=null,holdTimer=0,hold=false,tapUntil=0;
   const notify=name=>{if(mode!==name){mode=name;onGesture(name);}};
   function clean(){
-    goal.hand[2]=goal.hand[3]=0;goal.trail=[0,0];lastPoint=null;first=null;hold=false;clearTimeout(holdTimer);
+    tapUntil=0;goal.hand[2]=goal.hand[3]=0;goal.trail=[0,0];lastPoint=null;first=null;hold=false;clearTimeout(holdTimer);
     notify('');
   }
   function move(x,y,kind,strength=1,allowWind=true){
+    tapUntil=0;
     const t=performance.now(), [px,py]=engine.point(x,y);
     const fresh=lastPoint&&t-lastPoint.t<200, dt=fresh?Math.max(.016,(t-lastPoint.t)/1000):1;
     const vx=fresh?(px-lastPoint.px)/dt:0,vy=fresh?(py-lastPoint.py)/dt:0;
@@ -51,11 +52,14 @@ export function createInput(engine, ink, onGesture){
     move(e.clientX,e.clientY,hold||e.shiftKey?'pull':dragging&&first?'spread':'trail');
   });
   function release(e){
+    if(!contacts.has(e.pointerId))return;
+    const tapped=e.type==='pointerup'&&contacts.size===1&&first&&!hold;
     contacts.delete(e.pointerId);pinch=null;clean();
+    if(tapped){move(e.clientX,e.clientY,'spread',1,false);tapUntil=performance.now()+230;}
     if(contacts.size===1){const p=[...contacts.values()][0];move(p.x,p.y,'trail',1,false);}
   }
   for(const event of ['pointerup','pointercancel','lostpointercapture'])canvas.addEventListener(event,release);
-  canvas.addEventListener('pointerleave',()=>{if(!contacts.size&&!lastHand)clean();});
+  canvas.addEventListener('pointerleave',()=>{if(!contacts.size&&!lastHand&&!tapUntil)clean();});
   canvas.addEventListener('contextmenu',e=>e.preventDefault());
   canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=clamp(zoom*Math.exp(-clamp(e.deltaY,-100,100)*.0025),.52,1.85);},{passive:false});
   function clearHands(){
@@ -84,6 +88,7 @@ export function createInput(engine, ink, onGesture){
   let inkWidth=0, inkHeight=0;
   function tick(dt){
     const rate=1-Math.exp(-dt*15), now=performance.now();
+    if(tapUntil&&now>tapUntil)clean();
     if(lastHand&&now-lastHand>420)clearHands();
     if(!contacts.size&&!lastHand&&lastPoint&&now-lastPoint.t>700)clean();
     if(now-lastStorm>550&&mode==='星尘风暴')notify('');

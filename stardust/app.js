@@ -157,17 +157,18 @@ button.onclick=async()=>{
     if(session!==s)return;
     stopCamera();
     const tip={NotAllowedError:'未获得摄像头权限，可在浏览器中允许后重试。',NotFoundError:'未找到摄像头，仍可用鼠标或触屏操控。',NotReadableError:'摄像头正被占用，请关闭占用它的应用后重试。'};
-    message(tip[e.name]||'手部识别加载失败，请检查网络后重试。鼠标和触屏仍可使用。');
+    message(tip[e.name]||'手部识别未能启动，请检查网络和浏览器版本。仍可用鼠标或触屏操控。');
   }
 };
 cameraUI();
 let lastTime=0,windowStart=0,frames=0;
 function animate(time){
-  const dt=Math.min(.05,Math.max(0,(time-(lastTime||time))/1000));lastTime=time;
-  engine.draw(dt,input.tick(dt),count,el('glow').checked);
+  const elapsed=Math.max(0,(time-(lastTime||time))/1000),dt=Math.min(.095,elapsed);lastTime=time;
+  engine.draw(dt,input.tick(dt),count,el('glow').checked,elapsed);
   if(session?.ready)capture(session,time);
   if(!windowStart)windowStart=time;
-  if(++frames&&time-windowStart>=1100){
+  frames++;
+  if(time-windowStart>=1100){
     const fps=Math.round(frames*1000/(time-windowStart));el('fps').textContent=String(fps);
     trackRate(fps);frames=0;windowStart=time;
   }

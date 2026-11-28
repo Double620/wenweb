@@ -1,42 +1,20 @@
-// Local inference. Frames never leave the browser. The worker loads only model/runtime files.
-const local=new URL('./vendor/',import.meta.url).href.replace(/\/$/,'');
-const libraries=[
-  local,
-  'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14',
-  'https://unpkg.com/@mediapipe/tasks-vision@0.10.14'
-];
-const models=[
-  local+'/hand_landmarker.task',
-  'https://cdn.jsdelivr.net/gh/kiya0908/gesture-synth-weld@c8e0c70e8d1db8fcce75d97d61fd725553f5e36f/public/v1.0.1/hand_landmarker.task',
-  'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task'
-];
-async function modelBytes(){
-  for(const url of models){
-    const control=new AbortController(), timeout=setTimeout(()=>control.abort(),16000);
-    try{
-      const response=await fetch(url,{signal:control.signal});
-      if(!response.ok)throw Error('Model unavailable');
-      const bytes=new Uint8Array(await response.arrayBuffer());
-      if(bytes.length!==7819105)throw Error('Incomplete model');
-      const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');
-      if(hash!=='fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1')throw Error('Invalid model');
-      return bytes;
-    }catch(error){if(url===models.at(-1))throw error;}
-    finally{clearTimeout(timeout);}
-  }
-}
+// MediaPipe Tasks Vision 0.10.14 and the Google float16/v1 model are served with the assignment.
+// Only application assets are fetched. Camera frames are passed directly to the local runtime.
 export async function createTracker(){
-  const bytes=await modelBytes();
-  for(const root of libraries){
-    try{
-      const {HandLandmarker,FilesetResolver}=await import(root+'/vision_bundle.mjs');
-      const files=await FilesetResolver.forVisionTasks(root+'/wasm');
-      return await HandLandmarker.createFromOptions(files,{
-        baseOptions:{modelAssetBuffer:bytes,delegate:'CPU'}, runningMode:'VIDEO',numHands:2,
-        minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.55
-      });
-    }catch(error){if(root===libraries.at(-1))throw error;}
-  }
+  const root=new URL('./vendor/',import.meta.url);
+  const {HandLandmarker,FilesetResolver}=await import('./vendor/vision_bundle.mjs');
+  const [files,response]=await Promise.all([
+    FilesetResolver.forVisionTasks(new URL('wasm',root).href),
+    fetch(new URL('hand_landmarker.task',root))
+  ]);
+  if(!response.ok)throw Error('Cannot load the hand model');
+  const bytes=new Uint8Array(await response.arrayBuffer());
+  const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');
+  if(hash!=='fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1')throw Error('Invalid hand model');
+  return HandLandmarker.createFromOptions(files,{
+    baseOptions:{modelAssetBuffer:bytes,delegate:'CPU'}, runningMode:'VIDEO',numHands:2,
+    minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.55
+  });
 }
 const clamp=(n,lo,hi)=>Math.min(hi,Math.max(lo,n));
 const dist=(a,b,aspect)=>Math.hypot((a.x-b.x)*aspect,a.y-b.y);
