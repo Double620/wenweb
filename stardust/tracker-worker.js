@@ -3,7 +3,9 @@ self.onmessage=async ({data})=>{
   try{
     if(data.type==='load'){
       const {createTracker}=await import('./hands.js');
-      detector=await createTracker();
+      detector=await createTracker(progress=>self.postMessage({type:'progress',progress}));
+      self.postMessage({type:'ready'});
+    }else if(data.type==='resume'){
       self.postMessage({type:'ready'});
     }else if(data.frame){
       try {

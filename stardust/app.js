@@ -74,13 +74,31 @@ function cameraUI(){
 }
 el('showPreview').onchange=cameraUI;
 el('hidePreview').onclick=()=>{el('showPreview').checked=false;cameraUI();};
-function stopCamera(){
-  const old=session;session=null;
+let warm=null, warmTimer;
+function discardWarm(){
+  clearTimeout(warmTimer);
+  if(warm){warm.worker?.terminate();warm.tracker?.close();warm=null;}
+}
+function stopCamera(keepWarm=false){
+  const old=session;session=null;discardWarm();
   if(old){
-    clearTimeout(old.loadTimeout);old.worker?.terminate();old.rejectWorker?.(Error('Stopped'));
-    old.tracker?.close();old.stream?.getTracks().forEach(t=>t.stop());
+    old.stream?.getTracks().forEach(t=>t.stop());
+    clearTimeout(old.loadTimeout);old.abort.abort();old.rejectWorker?.(Error('Stopped'));
+    if(keepWarm===true&&old.ready&&!document.hidden&&(old.worker||old.tracker)){
+      warm={worker:old.worker,tracker:old.tracker};
+      if(warm.worker){warm.worker.onmessage=null;warm.worker.onerror=discardWarm;}
+      warmTimer=setTimeout(discardWarm,30000);
+    }else{old.worker?.terminate();old.tracker?.close();}
   }
   video.pause();video.srcObject=null;input.clearHands();cameraUI();
+}
+function updateProgress(s,progress){
+  if(session!==s)return;
+  s.progress=progress;
+  if(!s.videoReady||s.ready)return;
+  clearTimeout(s.loadTimeout);
+  s.loadTimeout=setTimeout(()=>{if(session===s&&!s.ready){stopCamera();message('模型加载超时，可重试或继续用鼠标、触屏体验。');}},80000);
+  message(progress.phase==='initialize'?'正在启动手势识别…':'正在准备识别资源　'+(progress.percent??0)+'%',0);
 }
 function dispatchHands(s,landmarks){
   if(s!==session)return;
@@ -88,17 +106,20 @@ function dispatchHands(s,landmarks){
   input.hands(landmarks,video.videoWidth/Math.max(1,video.videoHeight));
 }
 async function loadRecognition(s){
+  const saved=warm;warm=null;clearTimeout(warmTimer);
+  if(saved?.tracker){s.tracker=saved.tracker;return;}
   if(window.Worker&&window.createImageBitmap&&window.OffscreenCanvas){
     try{
       await new Promise((resolve,reject)=>{
         s.rejectWorker=reject;
-        const w=s.worker=new Worker('./tracker-worker.js');
+        const w=s.worker=saved?.worker||new Worker('./tracker-worker.js');
         w.onerror=()=>reject(Error('Worker unavailable'));
         w.onmessage=({data})=>{
+          if(data.type==='progress')updateProgress(s,data.progress);
           if(data.type==='ready')resolve();
           if(data.type==='error')reject(Error(data.message));
         };
-        w.postMessage({type:'load'});
+        w.postMessage({type:saved?.worker?'resume':'load'});
       });
       if(session!==s)return;
       s.rejectWorker=null;
@@ -113,7 +134,7 @@ async function loadRecognition(s){
       if(session!==s)throw error;
     }
   }
-  const tracker=await createTracker();
+  const tracker=await createTracker(progress=>updateProgress(s,progress),s.abort.signal);
   if(session!==s){tracker.close();return;}
   s.tracker=tracker;
 }
@@ -122,7 +143,7 @@ async function runtimeFailure(s){
   if(!s.worker){stopCamera();message('手势识别已中断，可重新开启摄像头。');return;}
   s.worker.terminate();s.worker=null;s.busy=true;
   try{
-    const tracker=await createTracker();
+    const tracker=await createTracker(progress=>updateProgress(s,progress),s.abort.signal);
     if(s!==session){tracker.close();return;}
     s.tracker=tracker;s.busy=false;
   }catch{if(s===session){stopCamera();message('手势识别暂时不可用，仍可用鼠标或触屏操控。');}}
@@ -138,20 +159,22 @@ async function capture(s,time){
     }else dispatchHands(s,s.tracker.detectForVideo(video,time).landmarks);
   }catch{if(s===session)runtimeFailure(s);}
 }
+async function openVideo(s){
+  const stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:'user',width:{ideal:640},height:{ideal:480},frameRate:{ideal:24,max:30}}});
+  if(session!==s){stream.getTracks().forEach(t=>t.stop());return;}
+  s.stream=stream;video.srcObject=stream;
+  stream.getVideoTracks()[0].addEventListener('ended',()=>{if(s===session){stopCamera();message('摄像头已断开。');}},{once:true});
+  await video.play();if(session!==s)return;
+  s.videoReady=true;updateProgress(s,s.progress||{phase:'download',percent:0});
+
+}
 button.onclick=async()=>{
-  if(session){stopCamera();el('notice').hidden=true;return;}
+  if(session){stopCamera(true);el('notice').hidden=true;return;}
   if(!navigator.mediaDevices?.getUserMedia){message('此浏览器无法调用摄像头，仍可用鼠标或触屏操控。');return;}
-  const s=session={ready:false,busy:false,lastTime:0,videoTime:-1};cameraUI();
+  const s=session={ready:false,busy:false,lastTime:0,videoTime:-1,abort:new AbortController()};cameraUI();
   message('请允许使用前置摄像头。',0);
   try{
-    const stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:'user',width:{ideal:640},height:{ideal:480},frameRate:{ideal:24,max:30}}});
-    if(session!==s){stream.getTracks().forEach(t=>t.stop());return;}
-    s.stream=stream;video.srcObject=stream;
-    stream.getVideoTracks()[0].addEventListener('ended',()=>{if(s===session){stopCamera();message('摄像头已断开。');}},{once:true});
-    await video.play();if(s!==session)return;
-    message('正在加载手部识别模型…',0);
-    s.loadTimeout=setTimeout(()=>{if(session===s&&!s.ready){stopCamera();message('模型加载超时，可重试或继续用鼠标、触屏体验。');}},80000);
-    await loadRecognition(s);if(s!==session)return;
+    await Promise.all([openVideo(s),loadRecognition(s)]);if(s!==session)return;
     clearTimeout(s.loadTimeout);s.ready=true;cameraUI();message('摄像头已开启，将手掌放进画面。');
   }catch(e){
     if(session!==s)return;
@@ -175,7 +198,7 @@ function animate(time){
   requestAnimationFrame(animate);
 }
 requestAnimationFrame(animate);
-document.addEventListener('visibilitychange',()=>{lastTime=windowStart=frames=0;if(document.hidden&&session){stopCamera();el('notice').hidden=true;}});
+document.addEventListener('visibilitychange',()=>{lastTime=windowStart=frames=0;if(document.hidden){stopCamera();el('notice').hidden=true;}});
 addEventListener('pagehide',stopCamera);
 engine.canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();stopCamera();message('图形设备已暂停，正在等待浏览器恢复。',0);});
 engine.canvas.addEventListener('webglcontextrestored',()=>location.reload());

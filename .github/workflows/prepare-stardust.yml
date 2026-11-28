@@ -22,6 +22,7 @@ jobs:
           curl -fsSL --retry 3 https://raw.githubusercontent.com/google-ai-edge/mediapipe/master/LICENSE -o "$vendor/LICENSE"
           curl -fsSL --retry 3 https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task -o "$vendor/hand_landmarker.task"
           echo "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1  $vendor/hand_landmarker.task" | sha256sum --check
+          python3 .github/stardust-pack.py
           git add "$vendor"
           if ! git diff --cached --quiet; then
             git config user.name github-actions[bot]
@@ -37,3 +38,13 @@ jobs:
           cp .github/stardust-qa.cjs "$RUNNER_TEMP/stardust-qa/run.cjs"
           python3 -m http.server 8100 --bind 127.0.0.1 >/tmp/stardust-http.log 2>&1 &
           node "$RUNNER_TEMP/stardust-qa/run.cjs"
+      - name: Measure cold start, reopen and reload on a shared 10 Mbit/s connection
+        run: |
+          set -euo pipefail
+          mkdir baseline
+          cp -a stardust/. baseline/
+          git fetch --depth=1 origin f8c1a66289c421158983d20ff4fe0d7a97db0845
+          for f in app.js hands.js tracker-worker.js; do git show "FETCH_HEAD:stardust/$f" > "baseline/$f"; done
+          python3 .github/stardust-bench-server.py > /tmp/stardust-bench.log 2>&1 &
+          cp .github/stardust-bench.cjs "$RUNNER_TEMP/stardust-qa/bench.cjs"
+          node "$RUNNER_TEMP/stardust-qa/bench.cjs"

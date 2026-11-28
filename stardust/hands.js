@@ -1,20 +1,28 @@
-// MediaPipe Tasks Vision 0.10.14 and the Google float16/v1 model are served with the assignment.
-// Only application assets are fetched. Camera frames are passed directly to the local runtime.
-export async function createTracker(){
+// Heavy assets start only on camera intent, using the SIMD variant selected by MediaPipe.
+export async function createTracker(report=()=>{},signal){
   const root=new URL('./vendor/',import.meta.url);
-  const {HandLandmarker,FilesetResolver}=await import('./vendor/vision_bundle.mjs');
-  const [files,response]=await Promise.all([
-    FilesetResolver.forVisionTasks(new URL('wasm',root).href),
-    fetch(new URL('hand_landmarker.task',root))
+  const [{HandLandmarker,FilesetResolver},{loadPlan,readAsset}]=await Promise.all([
+    import('./vendor/vision_bundle.mjs'),import('./asset-loader.js')
   ]);
-  if(!response.ok)throw Error('Cannot load the hand model');
-  const bytes=new Uint8Array(await response.arrayBuffer());
-  const hash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),v=>v.toString(16).padStart(2,'0')).join('');
-  if(hash!=='fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1')throw Error('Invalid hand model');
-  return HandLandmarker.createFromOptions(files,{
-    baseOptions:{modelAssetBuffer:bytes,delegate:'CPU'}, runningMode:'VIDEO',numHands:2,
-    minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.55
-  });
+  const files=await FilesetResolver.forVisionTasks(new URL('wasm',root).href);
+  const plans=[loadPlan(new URL('hand_landmarker.task',root).href),loadPlan(files.wasmBinaryPath)];
+  const loaded=[0,0],total=plans[0].expected+plans[1].expected;
+  let last=-1;
+  const progress=(i,n)=>{
+    loaded[i]=Math.min(plans[i].expected,n);
+    const percent=Math.floor(100*(loaded[0]+loaded[1])/total);
+    if(percent!==last){last=percent;report({phase:'download',percent});}
+  };
+  const [model,wasm]=await Promise.all(plans.map((p,i)=>readAsset(p,signal,n=>progress(i,n))));
+  if(signal?.aborted)throw new DOMException('Cancelled','AbortError');
+  report({phase:'initialize'});
+  const url=URL.createObjectURL(wasm.slice(0,wasm.size,'application/wasm'));
+  try{
+    return await HandLandmarker.createFromOptions({...files,wasmBinaryPath:url},{
+      baseOptions:{modelAssetBuffer:new Uint8Array(await model.arrayBuffer()),delegate:'CPU'},
+      runningMode:'VIDEO',numHands:2,minHandDetectionConfidence:.5,minHandPresenceConfidence:.5,minTrackingConfidence:.55
+    });
+  }finally{URL.revokeObjectURL(url);}
 }
 const clamp=(n,lo,hi)=>Math.min(hi,Math.max(lo,n));
 const dist=(a,b,aspect)=>Math.hypot((a.x-b.x)*aspect,a.y-b.y);
